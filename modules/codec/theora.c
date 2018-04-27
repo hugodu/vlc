@@ -82,9 +82,11 @@ static int  OpenDecoder   ( vlc_object_t * );
 static int  OpenPacketizer( vlc_object_t * );
 static void CloseDecoder  ( vlc_object_t * );
 
-static void *DecodeBlock  ( decoder_t *, block_t ** );
+static int DecodeVideo  ( decoder_t *, block_t * );
+static block_t *Packetize  ( decoder_t *, block_t ** );
 static int  ProcessHeaders( decoder_t * );
-static void *ProcessPacket ( decoder_t *, ogg_packet *, block_t ** );
+static void *ProcessPacket ( decoder_t *, ogg_packet *, block_t * );
+static void Flush( decoder_t * );
 
 static picture_t *DecodePacket( decoder_t *, ogg_packet * );
 
@@ -112,7 +114,7 @@ vlc_module_begin ()
     set_subcategory( SUBCAT_INPUT_VCODEC )
     set_shortname( "Theora" )
     set_description( N_("Theora video decoder") )
-    set_capability( "decoder", 100 )
+    set_capability( "video decoder", 100 )
     set_callbacks( OpenDecoder, CloseDecoder )
     add_shortcut( "theora" )
 #   define DEC_CFG_PREFIX "theora-"
@@ -157,21 +159,19 @@ static int OpenDecoder( vlc_object_t *p_this )
     /* Allocate the memory needed to store the decoder's structure */
     if( ( p_dec->p_sys = p_sys = malloc(sizeof(*p_sys)) ) == NULL )
         return VLC_ENOMEM;
-    p_dec->p_sys->b_packetizer = false;
+    p_sys->b_packetizer = false;
     p_sys->b_has_headers = false;
     p_sys->i_pts = VLC_TS_INVALID;
     p_sys->b_decoded_first_keyframe = false;
     p_sys->tcx = NULL;
 
     /* Set output properties */
-    p_dec->fmt_out.i_cat = VIDEO_ES;
     p_dec->fmt_out.i_codec = VLC_CODEC_I420;
 
     /* Set callbacks */
-    p_dec->pf_decode_video = (picture_t *(*)(decoder_t *, block_t **))
-        DecodeBlock;
-    p_dec->pf_packetize    = (block_t *(*)(decoder_t *, block_t **))
-        DecodeBlock;
+    p_dec->pf_decode    = DecodeVideo;
+    p_dec->pf_packetize = Packetize;
+    p_dec->pf_flush     = Flush;
 
     /* Init supporting Theora structures needed in header parsing */
     th_comment_init( &p_sys->tc );
@@ -183,12 +183,13 @@ static int OpenDecoder( vlc_object_t *p_this )
 static int OpenPacketizer( vlc_object_t *p_this )
 {
     decoder_t *p_dec = (decoder_t*)p_this;
+    decoder_sys_t *p_sys = p_dec->p_sys;
 
     int i_ret = OpenDecoder( p_this );
 
     if( i_ret == VLC_SUCCESS )
     {
-        p_dec->p_sys->b_packetizer = true;
+        p_sys->b_packetizer = true;
         p_dec->fmt_out.i_codec = VLC_CODEC_THEORA;
     }
 
@@ -200,15 +201,10 @@ static int OpenPacketizer( vlc_object_t *p_this )
  ****************************************************************************
  * This function must be fed with ogg packets.
  ****************************************************************************/
-static void *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
+static void *DecodeBlock( decoder_t *p_dec, block_t *p_block )
 {
     decoder_sys_t *p_sys = p_dec->p_sys;
-    block_t *p_block;
     ogg_packet oggpacket;
-
-    if( !pp_block || !*pp_block ) return NULL;
-
-    p_block = *pp_block;
 
     /* Block to Ogg packet */
     oggpacket.packet = p_block->p_buffer;
@@ -223,13 +219,34 @@ static void *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
     {
         if( ProcessHeaders( p_dec ) )
         {
-            block_Release( *pp_block );
+            block_Release( p_block );
             return NULL;
         }
         p_sys->b_has_headers = true;
     }
 
-    return ProcessPacket( p_dec, &oggpacket, pp_block );
+    return ProcessPacket( p_dec, &oggpacket, p_block );
+}
+
+static int DecodeVideo( decoder_t *p_dec, block_t *p_block )
+{
+    if( p_block == NULL ) /* No Drain */
+        return VLCDEC_SUCCESS;
+
+    picture_t *p_pic = DecodeBlock( p_dec, p_block );
+    if( p_pic != NULL )
+        decoder_QueueVideo( p_dec, p_pic );
+    return VLCDEC_SUCCESS;
+}
+
+static block_t *Packetize( decoder_t *p_dec, block_t **pp_block )
+{
+    if( pp_block == NULL ) /* No Drain */
+        return NULL;
+    block_t *p_block = *pp_block; *pp_block = NULL;
+    if( p_block == NULL )
+        return NULL;
+    return DecodeBlock( p_dec, p_block );
 }
 
 /*****************************************************************************
@@ -249,7 +266,7 @@ static int ProcessHeaders( decoder_t *p_dec )
                            p_dec->fmt_in.i_extra, p_dec->fmt_in.p_extra) )
         return VLC_EGENERIC;
     if( i_count < 3 )
-        goto error;
+        return VLC_EGENERIC;
 
     oggpacket.granulepos = -1;
     oggpacket.e_o_s = 0;
@@ -316,10 +333,10 @@ static int ProcessHeaders( decoder_t *p_dec )
         p_dec->fmt_out.video.i_frame_rate_base = p_sys->ti.fps_denominator;
     }
 
-    msg_Dbg( p_dec, "%dx%d %.02f fps video, frame content "
+    msg_Dbg( p_dec, "%dx%d %u/%u fps video, frame content "
              "is %dx%d with offset (%d,%d)",
              p_sys->ti.frame_width, p_sys->ti.frame_height,
-             (double)p_sys->ti.fps_numerator/p_sys->ti.fps_denominator,
+             p_sys->ti.fps_numerator, p_sys->ti.fps_denominator,
              p_sys->ti.pic_width, p_sys->ti.pic_height,
              p_sys->ti.pic_x, p_sys->ti.pic_y );
 
@@ -397,44 +414,60 @@ static int ProcessHeaders( decoder_t *p_dec )
     }
     else
     {
+        void* p_extra = realloc( p_dec->fmt_out.p_extra,
+                                 p_dec->fmt_in.i_extra );
+        if( unlikely( p_extra == NULL ) )
+        {
+            /* Clean up the decoder setup info... we're done with it */
+            th_setup_free( ts );
+            return VLC_ENOMEM;
+        }
+        p_dec->fmt_out.p_extra = p_extra;
         p_dec->fmt_out.i_extra = p_dec->fmt_in.i_extra;
-        p_dec->fmt_out.p_extra = xrealloc( p_dec->fmt_out.p_extra,
-                                                  p_dec->fmt_out.i_extra );
         memcpy( p_dec->fmt_out.p_extra,
                 p_dec->fmt_in.p_extra, p_dec->fmt_out.i_extra );
     }
 
-    for( unsigned i = 0; i < i_count; i++ )
-        free( pp_data[i] );
     /* Clean up the decoder setup info... we're done with it */
     th_setup_free( ts );
     return VLC_SUCCESS;
 
 error:
-    for( unsigned i = 0; i < i_count; i++ )
-        free( pp_data[i] );
     /* Clean up the decoder setup info... we're done with it */
     th_setup_free( ts );
     return VLC_EGENERIC;
 }
 
 /*****************************************************************************
+ * Flush:
+ *****************************************************************************/
+static void Flush( decoder_t *p_dec )
+{
+    decoder_sys_t *p_sys = p_dec->p_sys;
+
+    p_sys->i_pts = VLC_TS_INVALID;
+}
+
+/*****************************************************************************
  * ProcessPacket: processes a theora packet.
  *****************************************************************************/
 static void *ProcessPacket( decoder_t *p_dec, ogg_packet *p_oggpacket,
-                            block_t **pp_block )
+                            block_t *p_block )
 {
     decoder_sys_t *p_sys = p_dec->p_sys;
-    block_t *p_block = *pp_block;
     void *p_buf;
 
-    if( ( p_block->i_flags&(BLOCK_FLAG_DISCONTINUITY|BLOCK_FLAG_CORRUPTED) ) != 0 )
+    if( p_block->i_flags & (BLOCK_FLAG_DISCONTINUITY|BLOCK_FLAG_CORRUPTED) )
     {
-        /* Don't send the the first packet after a discontinuity to
-         * theora_decode, otherwise we get purple/green display artifacts
-         * appearing in the video output */
-        block_Release(p_block);
-        return NULL;
+        Flush( p_dec );
+        if( p_block->i_flags & BLOCK_FLAG_CORRUPTED )
+        {
+            /* Don't send the a corrupted packet to
+             * theora_decode, otherwise we get purple/green display artifacts
+             * appearing in the video output */
+            block_Release(p_block);
+            return NULL;
+        }
     }
 
     /* Date management */
@@ -442,8 +475,6 @@ static void *ProcessPacket( decoder_t *p_dec, ogg_packet *p_oggpacket,
     {
         p_sys->i_pts = p_block->i_pts;
     }
-
-    *pp_block = NULL; /* To avoid being fed the same packet again */
 
     if( p_sys->b_packetizer )
     {
@@ -457,12 +488,11 @@ static void *ProcessPacket( decoder_t *p_dec, ogg_packet *p_oggpacket,
     else
     {
         p_buf = DecodePacket( p_dec, p_oggpacket );
-        if( p_block )
-            block_Release( p_block );
+        block_Release( p_block );
     }
 
     /* Date management */
-    p_sys->i_pts += ( INT64_C(1000000) * p_sys->ti.fps_denominator /
+    p_sys->i_pts += ( CLOCK_FREQ * p_sys->ti.fps_denominator /
                       p_sys->ti.fps_numerator ); /* 1 frame per packet */
 
     return p_buf;
@@ -501,12 +531,15 @@ static picture_t *DecodePacket( decoder_t *p_dec, ogg_packet *p_oggpacket )
         return NULL;
 
     /* Get a new picture */
+    if( decoder_UpdateVideoFormat( p_dec ) )
+        return NULL;
     p_pic = decoder_NewPicture( p_dec );
     if( !p_pic ) return NULL;
 
     theora_CopyPicture( p_pic, ycbcr );
 
     p_pic->date = p_sys->i_pts;
+    p_pic->b_progressive = true;
 
     return p_pic;
 }
@@ -518,6 +551,9 @@ static void ParseTheoraComments( decoder_t *p_dec )
 {
     char *psz_name, *psz_value, *psz_comment;
     int i = 0;
+
+    decoder_sys_t *p_sys = p_dec->p_sys;
+
     /* Regarding the th_comment structure: */
 
     /* The metadata is stored as a series of (tag, value) pairs, in
@@ -533,14 +569,14 @@ static void ParseTheoraComments( decoder_t *p_dec )
        the bitstream format itself treats them as 8-bit clean vectors,
        possibly containing null characters, and so the length array
        should be treated as their authoritative length. */
-    while ( i < p_dec->p_sys->tc.comments )
+    while ( i < p_sys->tc.comments )
     {
-        int clen = p_dec->p_sys->tc.comment_lengths[i];
+        int clen = p_sys->tc.comment_lengths[i];
         if ( clen <= 0 || clen >= INT_MAX ) { i++; continue; }
         psz_comment = (char *)malloc( clen + 1 );
         if( !psz_comment )
             break;
-        memcpy( (void*)psz_comment, (void*)p_dec->p_sys->tc.user_comments[i], clen + 1 );
+        memcpy( (void*)psz_comment, (void*)p_sys->tc.user_comments[i], clen + 1 );
         psz_name = psz_comment;
         psz_value = strchr( psz_comment, '=' );
         if( psz_value )
@@ -571,7 +607,6 @@ static void CloseDecoder( vlc_object_t *p_this )
     th_info_clear(&p_sys->ti);
     th_comment_clear(&p_sys->tc);
     th_decode_free(p_sys->tcx);
-    p_sys->tcx = NULL;
     free( p_sys );
 }
 
@@ -640,7 +675,6 @@ struct encoder_sys_t
     th_info      ti;                     /* theora bitstream settings */
     th_comment   tc;                     /* theora comment header */
     th_enc_ctx   *tcx;                   /* theora context */
-    int i_width, i_height;
 };
 
 /*****************************************************************************
@@ -658,12 +692,12 @@ static int OpenEncoder( vlc_object_t *p_this )
     int status;
 
     if( p_enc->fmt_out.i_codec != VLC_CODEC_THEORA &&
-        !p_enc->b_force )
+        !p_enc->obj.force )
     {
         return VLC_EGENERIC;
     }
 
-    /* Allocate the memory needed to store the decoder's structure */
+    /* Allocate the memory needed to store the encoder's structure */
     if( ( p_sys = malloc(sizeof(encoder_sys_t)) ) == NULL )
         return VLC_ENOMEM;
     p_enc->p_sys = p_sys;
@@ -700,9 +734,6 @@ static int OpenEncoder( vlc_object_t *p_this )
     p_sys->ti.pic_x = 0 /*frame_x_offset*/;
     p_sys->ti.pic_y = 0 /*frame_y_offset*/;
 
-    p_sys->i_width = p_sys->ti.frame_width;
-    p_sys->i_height = p_sys->ti.frame_height;
-
     if( !p_enc->fmt_in.video.i_frame_rate ||
         !p_enc->fmt_in.video.i_frame_rate_base )
     {
@@ -731,7 +762,7 @@ static int OpenEncoder( vlc_object_t *p_this )
     }
 
     p_sys->ti.target_bitrate = p_enc->fmt_out.i_bitrate;
-    p_sys->ti.quality = ((float)i_quality) * 6.3;
+    p_sys->ti.quality = ((float)i_quality) * 6.3f;
 
 
     p_sys->tcx = th_encode_alloc( &p_sys->ti );
@@ -788,77 +819,77 @@ static block_t *Encode( encoder_t *p_enc, picture_t *p_pict )
     ogg_packet oggpacket;
     block_t *p_block;
     th_ycbcr_buffer ycbcr;
-    int i;
+    unsigned i;
 
     if( !p_pict ) return NULL;
     /* Sanity check */
-    if( p_pict->p[0].i_pitch < (int)p_sys->i_width ||
-        p_pict->p[0].i_lines < (int)p_sys->i_height )
+    if( p_pict->p[0].i_pitch < (int)p_sys->ti.frame_width ||
+        p_pict->p[0].i_lines < (int)p_sys->ti.frame_height )
     {
         msg_Warn( p_enc, "frame is smaller than encoding size"
                   "(%ix%i->%ix%i) -> dropping frame",
                   p_pict->p[0].i_pitch, p_pict->p[0].i_lines,
-                  p_sys->i_width, p_sys->i_height );
+                  p_sys->ti.frame_width, p_sys->ti.frame_height );
         return NULL;
     }
 
     /* Fill padding */
-    if( p_pict->p[0].i_visible_pitch < (int)p_sys->i_width )
+    if( p_pict->p[0].i_visible_pitch < (int)p_sys->ti.frame_width )
     {
-        for( i = 0; i < p_sys->i_height; i++ )
+        for( i = 0; i < p_sys->ti.frame_height; i++ )
         {
             memset( p_pict->p[0].p_pixels + i * p_pict->p[0].i_pitch +
                     p_pict->p[0].i_visible_pitch,
                     *( p_pict->p[0].p_pixels + i * p_pict->p[0].i_pitch +
                        p_pict->p[0].i_visible_pitch - 1 ),
-                    p_sys->i_width - p_pict->p[0].i_visible_pitch );
+                    p_sys->ti.frame_width - p_pict->p[0].i_visible_pitch );
         }
-        for( i = 0; i < p_sys->i_height / 2; i++ )
+        for( i = 0; i < p_sys->ti.frame_height / 2; i++ )
         {
             memset( p_pict->p[1].p_pixels + i * p_pict->p[1].i_pitch +
                     p_pict->p[1].i_visible_pitch,
                     *( p_pict->p[1].p_pixels + i * p_pict->p[1].i_pitch +
                        p_pict->p[1].i_visible_pitch - 1 ),
-                    p_sys->i_width / 2 - p_pict->p[1].i_visible_pitch );
+                    p_sys->ti.frame_width / 2 - p_pict->p[1].i_visible_pitch );
             memset( p_pict->p[2].p_pixels + i * p_pict->p[2].i_pitch +
                     p_pict->p[2].i_visible_pitch,
                     *( p_pict->p[2].p_pixels + i * p_pict->p[2].i_pitch +
                        p_pict->p[2].i_visible_pitch - 1 ),
-                    p_sys->i_width / 2 - p_pict->p[2].i_visible_pitch );
+                    p_sys->ti.frame_width / 2 - p_pict->p[2].i_visible_pitch );
         }
     }
 
-    if( p_pict->p[0].i_visible_lines < (int)p_sys->i_height )
+    if( p_pict->p[0].i_visible_lines < (int)p_sys->ti.frame_height )
     {
-        for( i = p_pict->p[0].i_visible_lines; i < p_sys->i_height; i++ )
+        for( i = p_pict->p[0].i_visible_lines; i < p_sys->ti.frame_height; i++ )
         {
             memset( p_pict->p[0].p_pixels + i * p_pict->p[0].i_pitch, 0,
-                    p_sys->i_width );
+                    p_sys->ti.frame_width );
         }
-        for( i = p_pict->p[1].i_visible_lines; i < p_sys->i_height / 2; i++ )
+        for( i = p_pict->p[1].i_visible_lines; i < p_sys->ti.frame_height / 2; i++ )
         {
             memset( p_pict->p[1].p_pixels + i * p_pict->p[1].i_pitch, 0x80,
-                    p_sys->i_width / 2 );
+                    p_sys->ti.frame_width / 2 );
             memset( p_pict->p[2].p_pixels + i * p_pict->p[2].i_pitch, 0x80,
-                    p_sys->i_width / 2 );
+                    p_sys->ti.frame_width / 2 );
         }
     }
 
     /* Theora is a one-frame-in, one-frame-out system. Submit a frame
      * for compression and pull out the packet. */
 
-    ycbcr[0].width = p_sys->i_width;
-    ycbcr[0].height = p_sys->i_height;
+    ycbcr[0].width = p_sys->ti.frame_width;
+    ycbcr[0].height = p_sys->ti.frame_height;
     ycbcr[0].stride = p_pict->p[0].i_pitch;
     ycbcr[0].data = p_pict->p[0].p_pixels;
 
-    ycbcr[1].width = p_sys->i_width / 2;
-    ycbcr[1].height = p_sys->i_height / 2;
+    ycbcr[1].width = p_sys->ti.frame_width / 2;
+    ycbcr[1].height = p_sys->ti.frame_height / 2;
     ycbcr[1].stride = p_pict->p[1].i_pitch;
     ycbcr[1].data = p_pict->p[1].p_pixels;
 
-    ycbcr[2].width = p_sys->i_width / 2;
-    ycbcr[2].height = p_sys->i_height / 2;
+    ycbcr[2].width = p_sys->ti.frame_width / 2;
+    ycbcr[2].height = p_sys->ti.frame_height / 2;
     ycbcr[2].stride = p_pict->p[1].i_pitch;
     ycbcr[2].data = p_pict->p[2].p_pixels;
 
@@ -894,7 +925,6 @@ static void CloseEncoder( vlc_object_t *p_this )
     th_info_clear(&p_sys->ti);
     th_comment_clear(&p_sys->tc);
     th_encode_free(p_sys->tcx);
-    p_sys->tcx = NULL;
     free( p_sys );
 }
 #endif

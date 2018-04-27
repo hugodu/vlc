@@ -1,7 +1,7 @@
 <!--  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - >
 <  mobile.html: VLC media player web interface - VLM
 < - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - >
-<  Copyright (C) 2005-2006 the VideoLAN team
+<  Copyright (C) 2005-2014 VLC authors and VideoLAN
 <  $Id$
 <
 <  Authors: Brandon Brooks <bwbrooks -at- archmageinc -dot- com>
@@ -18,11 +18,11 @@
 <
 <  You should have received a copy of the GNU General Public License
 <  along with this program; if not, write to the Free Software
-<  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA.
+<  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
 < - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -->
 <html>
 	<head>
-		<title>VLC media player - Web Interface</title>
+		<title><?vlc gettext("VLC media player - Web Interface") ?></title>
 		<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
 		<meta name="viewport" content="initial-scale=1.0" />
 		<meta name="viewport" content="width=device-width" />
@@ -31,12 +31,12 @@
 		<script type="text/javascript" src="js/common.js"></script>
 		<link type="text/css" href="css/ui-lightness/jquery-ui-1.8.13.custom.css" rel="stylesheet" />
 		<link type="text/css" href="css/mobile.css" rel="stylesheet" />
-		<script type="text/javascript" src="js/jquery-1.5.1.min.js"></script>
-		<script type="text/javascript" src="js/jquery-ui-1.8.13.custom.min.js"></script>
+		<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.6.1/jquery.min.js"></script>
+		<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jqueryui/1.8.13/jquery-ui.min.js"></script>
 		<script type="text/javascript" src="js/jquery.jstree.js"></script>
 		<script type="text/javascript" src="http://releases.flowplayer.org/js/flowplayer-3.2.6.min.js"></script>
 		<script type="text/javascript" src="js/ui.js"></script>
-		<script type="text/javascript" src="js/controlers.js"></script>
+		<script type="text/javascript" src="js/controllers.js"></script>
 		<script type="text/javascript">
 			var pollStatus	=	true;
 			$(function(){
@@ -62,6 +62,14 @@
 					}
 					return false;
 				});
+                $('#buttonRewd').click(function(){
+                    sendCommand({'command': 'seek', 'val': '-30S'});
+                    return false;
+                });
+                $('#buttonFwrd').click(function(){
+                    sendCommand({'command': 'seek', 'val': '+30S'});
+                    return false;
+                });
 			})
 		</script>
 	</head>
@@ -73,10 +81,12 @@
 		<div style="width:100%"><div id="mediaTitle" class="dynamic centered"></div></div>
 		<div id="play_controls">
 			<div id="buttons">
-				<div id="buttonPrev" class="button48  ui-corner-all" title="Previous"></div>
-				<div id="buttonPlay" class="button48  ui-corner-all paused" title="Play"></div>
-				<div id="buttonStop" class="button48  ui-corner-all" title="Stop"></div>
-				<div id="buttonNext" class="button48  ui-corner-all" title="Next"></div>
+				<div id="buttonPrev" class="button48  ui-corner-all" title="<?vlc gettext("Previous") ?>">
+				</div><div id="buttonRewd" class="button48  ui-corner-all" title="<?vlc gettext("Rewind") ?>">
+				</div><div id="buttonPlay" class="button48  ui-corner-all paused" title="<?vlc gettext("Play") ?>">
+				</div><div id="buttonStop" class="button48  ui-corner-all" title="<?vlc gettext("Stop") ?>">
+				</div><div id="buttonFwrd" class="button48  ui-corner-all" title="<?vlc gettext("Forward") ?>">
+				</div><div id="buttonNext" class="button48  ui-corner-all" title="<?vlc gettext("Next") ?>"></div>
 			</div>
 			<div id="seekSlider" title="Seek Time" style="font-size:15px;"></div>
 			<div id="currentTime" class="dynamic">00:00:00</div>
@@ -84,10 +94,10 @@
 		</div>
 		<div id="controls">
 			<div id="buttons">
-				<div id="buttonOpen" class="button48  ui-corner-all" title="Open Media"></div>
-				<div id="buttonFull" class="button48  ui-corner-all" title="Full Screen"></div>
-				<div id="buttonEQ" class="button48 ui-corner-all" title="Equalizer"></div>
-				<div id="buttonSout" class="button48  ui-corner-all" title="Easy Stream"></div>
+				<div id="buttonOpen" class="button48  ui-corner-all" title="<?vlc gettext("Open Media") ?>">
+				</div><div id="buttonFull" class="button48  ui-corner-all" title="<?vlc gettext("Full Screen") ?>">
+				</div><div id="buttonEQ" class="button48 ui-corner-all" title="<?vlc gettext("Equalizer") ?>">
+				</div><div id="buttonSout" class="button48  ui-corner-all" title="<?vlc gettext("Easy Stream") ?>"></div>
 			</div>
 			<div id="volumeSlider" title="Volume" style="font-size:15px;">
 				<img src="images/speaker-32.png" class="ui-slider-handle" alt="volume"/>

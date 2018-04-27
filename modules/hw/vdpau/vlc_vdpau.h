@@ -79,7 +79,7 @@ VdpStatus vdp_bitmap_surface_put_bits_native(const vdp_t *, VdpBitmapSurface,
     const void *const *, const uint32_t *, const VdpRect *);
 VdpStatus vdp_output_surface_render_output_surface(const vdp_t *,
     VdpOutputSurface, const VdpRect *, VdpOutputSurface, const VdpRect *,
-    const VdpColor *, const VdpOutputSurfaceRenderBlendState const *,
+    const VdpColor *, const VdpOutputSurfaceRenderBlendState *const,
     uint32_t);
 VdpStatus vdp_output_surface_render_bitmap_surface(const vdp_t *,
     VdpOutputSurface, const VdpRect *, VdpBitmapSurface, const VdpRect *,
@@ -110,7 +110,7 @@ VdpStatus vdp_video_mixer_create(const vdp_t *, VdpDevice, uint32_t,
 VdpStatus vdp_video_mixer_set_feature_enables(const vdp_t *, VdpVideoMixer,
     uint32_t, const VdpVideoMixerFeature *, const VdpBool *);
 VdpStatus vdp_video_mixer_set_attribute_values(const vdp_t *, VdpVideoMixer,
-    uint32_t, const VdpVideoMixerAttribute const *, const void *const *);
+    uint32_t, const VdpVideoMixerAttribute *const, const void *const *);
 VdpStatus vdp_video_mixer_get_feature_support(const vdp_t *, VdpVideoMixer,
     uint32_t, const VdpVideoMixerFeature *, VdpBool *);
 VdpStatus vdp_video_mixer_get_feature_enables(const vdp_t *, VdpVideoMixer,
@@ -204,10 +204,11 @@ vdp_t *vdp_hold_x11(vdp_t *vdp, VdpDevice *device);
 void vdp_release_x11(vdp_t *);
 
 /* VLC specifics */
+# include <stdatomic.h>
 # include <stdbool.h>
 # include <vlc_common.h>
 # include <vlc_fourcc.h>
-# include <vlc_atomic.h>
+# include <vlc_picture.h>
 
 /** Converts VLC YUV format to VDPAU chroma type and YCbCr format */
 static inline
@@ -260,6 +261,7 @@ struct picture_sys_t
     VdpOutputSurface surface;
     VdpDevice device;
     vdp_t *vdp;
+    void *gl_nv_surface;
 };
 
 typedef struct vlc_vdp_video_frame
@@ -272,7 +274,7 @@ typedef struct vlc_vdp_video_frame
 
 typedef struct vlc_vdp_video_field
 {
-    void (*destroy)(void *); /* must be first @ref picture_Release() */
+    picture_context_t context;
     vlc_vdp_video_frame_t *frame;
     VdpVideoMixerPictureStructure structure;
     VdpProcamp procamp;
@@ -281,8 +283,6 @@ typedef struct vlc_vdp_video_field
 
 /**
  * Attaches a VDPAU video surface as context of a VLC picture.
- * @note In case of error, the surface is destroyed immediately. Otherwise,
- * it will be destroyed at the same time as the picture it was attached to.
  */
 VdpStatus vlc_vdp_video_attach(vdp_t *, VdpVideoSurface, picture_t *);
 
@@ -291,9 +291,18 @@ VdpStatus vlc_vdp_video_attach(vdp_t *, VdpVideoSurface, picture_t *);
  */
 vlc_vdp_video_field_t *vlc_vdp_video_create(vdp_t *, VdpVideoSurface);
 
+static inline void vlc_vdp_video_destroy(vlc_vdp_video_field_t *f)
+{
+    return f->context.destroy(&f->context);
+}
+
 /**
  * Performs a shallow copy of a VDPAU video surface context
  * (the underlying VDPAU video surface is shared).
  */
-vlc_vdp_video_field_t *vlc_vdp_video_copy(vlc_vdp_video_field_t *);
+static inline vlc_vdp_video_field_t *vlc_vdp_video_copy(
+    vlc_vdp_video_field_t *fold)
+{
+    return (vlc_vdp_video_field_t *)fold->context.copy(&fold->context);
+}
 #endif

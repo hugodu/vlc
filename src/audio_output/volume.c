@@ -31,6 +31,7 @@
 #include <vlc_modules.h>
 #include <vlc_aout.h>
 #include <vlc_aout_volume.h>
+#include <vlc_atomic.h>
 #include "aout_internal.h"
 
 struct aout_volume
@@ -113,7 +114,7 @@ void aout_volume_Delete(aout_volume_t *vol)
 
     if (vol->module != NULL)
         module_unneed(obj, vol->module);
-    var_DelCallback(obj->p_parent, "audio-replay-gain-mode",
+    var_DelCallback(obj->obj.parent, "audio-replay-gain-mode",
                     ReplayGainCallback, vol);
     vlc_object_release(obj);
 }
@@ -135,7 +136,7 @@ int aout_volume_Amplify(aout_volume_t *vol, block_t *block)
         return -1;
 
     float amp = vol->output_factor
-              * vlc_atomic_loadf (&vol->gain_factor);
+              * vlc_atomic_load_float (&vol->gain_factor);
 
     vol->object.amplify(&vol->object, block, amp);
     return 0;
@@ -197,7 +198,7 @@ static int ReplayGainCallback (vlc_object_t *obj, char const *var,
     aout_volume_t *vol = data;
     float multiplier = aout_ReplayGainSelect(obj, val.psz_string,
                                              &vol->replay_gain);
-    vlc_atomic_storef (&vol->gain_factor, multiplier);
+    vlc_atomic_store_float (&vol->gain_factor, multiplier);
     VLC_UNUSED(var); VLC_UNUSED(oldval);
     return VLC_SUCCESS;
 }

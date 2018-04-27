@@ -3,17 +3,21 @@ BUILT_SOURCES_distclean += \
 	extras/package/win32/msi/config.wxi
 endif
 
-WIXPATH=`winepath -u 'C:\\Program Files (x86)\\Windows Installer XML v3.5\\bin'`
+WIXPATH=`wine winepath -u 'C:\\Program Files (x86)\\Windows Installer XML v3.5\\bin'`
 HEAT=wine "$(WIXPATH)/heat.exe"
 CANDLE=wine "$(WIXPATH)/candle.exe"
 LIGHT=wine "$(WIXPATH)/light.exe"
-VLCDIR=`winepath -s \`winepath -w '$(win32_destdir)'\``
+VLCDIR=`wine winepath -s \`wine winepath -w '$(abs_top_builddir)/vlc-$(VERSION)'\``
 MSIDIR=$(abs_srcdir)/extras/package/win32/msi
-W_MSIDIR=`winepath -w '$(MSIDIR)'`
+W_MSIDIR=`wine winepath -w '$(MSIDIR)'`
 MSIBUILDDIR=$(abs_top_builddir)/extras/package/win32/msi
-W_MSIBUILDDIR=`winepath -w '$(MSIBUILDDIR)'`
-MSIOUTFILE=vlc-$(VERSION).msi
-WINE_C=`winepath c:`
+W_MSIBUILDDIR=`wine winepath -w '$(MSIBUILDDIR)'`
+if HAVE_WIN64
+MSIOUTFILE=vlc-$(VERSION)-win64.msi
+else
+MSIOUTFILE=vlc-$(VERSION)-win32.msi
+endif
+WINE_C=`wine winepath c:`
 
 package-msi: heat candle light
 
@@ -28,8 +32,8 @@ candle:
 
 light:
 	test ! -d "$(WINE_C)/v" -o ! -f "$(WINE_C)/v"
-	ln -Tsf "$(win32_destdir)" "$(WINE_C)"/v
-	$(LIGHT) -sval -ext WixUIExtension -ext WixUtilExtension -cultures:en-us -b $(W_MSIDIR) -b C:/v/plugins -b C:/v/locale -b C:/v/lua -b C:/v/skins $(W_MSIBUILDDIR)\\product.wixobj $(W_MSIBUILDDIR)\\axvlc.wixobj $(W_MSIBUILDDIR)\\extensions.wixobj $(W_MSIBUILDDIR)\\*.fragment.wixobj -o $(MSIOUTFILE)
+	ln -Tsf "$(abs_top_builddir)/vlc-$(VERSION)" "$(WINE_C)"/v
+	$(LIGHT) -sval -spdb -ext WixUIExtension -ext WixUtilExtension -cultures:en-us -b $(W_MSIDIR) -b C:/v/plugins -b C:/v/locale -b C:/v/lua -b C:/v/skins $(W_MSIBUILDDIR)\\product.wixobj $(W_MSIBUILDDIR)\\axvlc.wixobj $(W_MSIBUILDDIR)\\extensions.wixobj $(W_MSIBUILDDIR)\\*.fragment.wixobj -o $(MSIOUTFILE)
 	chmod 644 $(MSIOUTFILE)
 
 cleanmsi:

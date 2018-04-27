@@ -42,7 +42,7 @@ public:
                GenericLayout &rLayout, int width, int height );
     virtual ~CmdResize() { }
     virtual void execute();
-    virtual string getType() const { return "resize"; }
+    virtual std::string getType() const { return "resize"; }
 
 private:
     const WindowManager &m_rWindowManager;
@@ -60,7 +60,7 @@ public:
                    int width, int height );
     virtual ~CmdResizeVout() { }
     virtual void execute();
-    virtual string getType() const { return "resize vout"; }
+    virtual std::string getType() const { return "resize vout"; }
 
 private:
     vout_window_t* m_pWnd;
@@ -77,11 +77,26 @@ public:
                       bool fullscreen );
     virtual ~CmdSetFullscreen() { }
     virtual void execute();
-    virtual string getType() const { return "toogle fullscreen"; }
+    virtual std::string getType() const { return "toogle fullscreen"; }
 
 private:
     vout_window_t* m_pWnd;
     bool m_bFullscreen;
 };
 
+
+/// Command to hide mouse
+class CmdHideMouse: public CmdGeneric
+{
+public:
+    /// hide the mouse
+    CmdHideMouse( intf_thread_t *pIntf, vout_window_t* pWnd, bool hide );
+    virtual ~CmdHideMouse() { }
+    virtual void execute();
+    virtual std::string getType() const { return "hide mouse"; }
+
+private:
+    vout_window_t* m_pWnd;
+    bool m_bHide;
+};
 #endif

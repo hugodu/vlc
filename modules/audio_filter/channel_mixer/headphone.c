@@ -32,6 +32,7 @@
 
 #include <math.h>                                        /* sqrt */
 
+#define VLC_MODULE_LICENSE VLC_LICENSE_GPL_2_PLUS
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_aout.h>
@@ -105,7 +106,7 @@ struct atomic_operation_t
 struct filter_sys_t
 {
     size_t i_overflow_buffer_size;/* in bytes */
-    uint8_t * p_overflow_buffer;
+    float * p_overflow_buffer;
     unsigned int i_nb_atomic_operations;
     struct atomic_operation_t * p_atomic_operations;
 };
@@ -337,8 +338,9 @@ static void DoWork( filter_t * p_filter,
     int i_output_nb = aout_FormatNbChannels( &p_filter->fmt_out.audio );
 
     float * p_in = (float*) p_in_buf->p_buffer;
-    uint8_t * p_out;
+    float * p_out;
     uint8_t * p_overflow;
+    uint8_t * p_end_overflow;
     uint8_t * p_slide;
 
     size_t i_overflow_size;     /* in bytes */
@@ -351,39 +353,37 @@ static void DoWork( filter_t * p_filter,
     unsigned int i_delay;
     double d_amplitude_factor;
 
-    /* out buffer characterisitcs */
-    p_out_buf->i_nb_samples = p_in_buf->i_nb_samples;
-    p_out_buf->i_buffer = p_in_buf->i_buffer * i_output_nb / i_input_nb;
-    p_out = p_out_buf->p_buffer;
+    p_out = (float *)p_out_buf->p_buffer;
     i_out_size = p_out_buf->i_buffer;
 
     /* Slide the overflow buffer */
-    p_overflow = p_sys->p_overflow_buffer;
+    p_overflow = (uint8_t *) p_sys->p_overflow_buffer;
     i_overflow_size = p_sys->i_overflow_buffer_size;
+    p_end_overflow = p_overflow + i_overflow_size;
 
     memset( p_out, 0, i_out_size );
-    if ( i_out_size > i_overflow_size )
-        memcpy( p_out, p_overflow, i_overflow_size );
-    else
-        memcpy( p_out, p_overflow, i_out_size );
+    memcpy( p_out, p_overflow, __MIN( i_out_size, i_overflow_size ) );
 
-    p_slide = p_sys->p_overflow_buffer;
-    while( p_slide < p_overflow + i_overflow_size )
+    p_slide = (uint8_t *) p_sys->p_overflow_buffer;
+    while( p_slide < p_end_overflow )
     {
-        if( p_slide + i_out_size < p_overflow + i_overflow_size )
+        size_t i_bytes_copied;
+
+        if( p_slide + i_out_size < p_end_overflow )
         {
             memset( p_slide, 0, i_out_size );
-            if( p_slide + 2 * i_out_size < p_overflow + i_overflow_size )
-                memcpy( p_slide, p_slide + i_out_size, i_out_size );
+            if( p_slide + 2 * i_out_size < p_end_overflow )
+                i_bytes_copied = i_out_size;
             else
-                memcpy( p_slide, p_slide + i_out_size,
-                        p_overflow + i_overflow_size - ( p_slide + i_out_size ) );
+                i_bytes_copied = p_end_overflow - ( p_slide + i_out_size );
+            memcpy( p_slide, p_slide + i_out_size, i_bytes_copied );
         }
         else
         {
-            memset( p_slide, 0, p_overflow + i_overflow_size - p_slide );
+            i_bytes_copied = p_end_overflow - p_slide;
+            memset( p_slide, 0, i_bytes_copied );
         }
-        p_slide += i_out_size;
+        p_slide += i_bytes_copied;
     }
 
     /* apply the atomic operations */
@@ -472,15 +472,18 @@ static int OpenFilter( vlc_object_t *p_this )
     p_filter->fmt_in.audio.i_format = VLC_CODEC_FL32;
     p_filter->fmt_out.audio.i_format = VLC_CODEC_FL32;
     p_filter->fmt_out.audio.i_rate = p_filter->fmt_in.audio.i_rate;
-    p_filter->fmt_in.audio.i_original_channels =
-                                   p_filter->fmt_out.audio.i_original_channels;
+    p_filter->fmt_in.audio.i_chan_mode =
+                                   p_filter->fmt_out.audio.i_chan_mode;
     if( p_filter->fmt_in.audio.i_physical_channels == AOUT_CHANS_STEREO
-     && (p_filter->fmt_in.audio.i_original_channels & AOUT_CHAN_DOLBYSTEREO)
+     && (p_filter->fmt_in.audio.i_chan_mode & AOUT_CHANMODE_DOLBYSTEREO)
      && !var_InheritBool( p_filter, "headphone-dolby" ) )
     {
         p_filter->fmt_in.audio.i_physical_channels = AOUT_CHANS_5_0;
     }
     p_filter->pf_audio_filter = Convert;
+
+    aout_FormatPrepare(&p_filter->fmt_in.audio);
+    aout_FormatPrepare(&p_filter->fmt_out.audio);
 
     return VLC_SUCCESS;
 }
@@ -491,10 +494,11 @@ static int OpenFilter( vlc_object_t *p_this )
 static void CloseFilter( vlc_object_t *p_this )
 {
     filter_t *p_filter = (filter_t *)p_this;
+    filter_sys_t *p_sys = p_filter->p_sys;
 
-    free( p_filter->p_sys->p_overflow_buffer );
-    free( p_filter->p_sys->p_atomic_operations );
-    free( p_filter->p_sys );
+    free( p_sys->p_overflow_buffer );
+    free( p_sys->p_atomic_operations );
+    free( p_sys );
 }
 
 static block_t *Convert( filter_t *p_filter, block_t *p_block )
@@ -506,9 +510,9 @@ static block_t *Convert( filter_t *p_filter, block_t *p_block )
         return NULL;
     }
 
-    size_t i_out_size = p_block->i_nb_samples *
-      p_filter->fmt_out.audio.i_bitspersample/8 *
-        aout_FormatNbChannels( &(p_filter->fmt_out.audio) );
+    size_t i_out_size = p_block->i_buffer *
+        aout_FormatNbChannels( &(p_filter->fmt_out.audio) ) /
+        aout_FormatNbChannels( &(p_filter->fmt_in.audio) );
 
     block_t *p_out = block_Alloc( i_out_size );
     if( !p_out )

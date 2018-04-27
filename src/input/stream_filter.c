@@ -34,96 +34,93 @@
 
 #include "stream.h"
 
-static void StreamDelete( stream_t * );
-
-stream_t *stream_FilterNew( stream_t *p_source,
-                            const char *psz_stream_filter )
+struct vlc_stream_filter_private
 {
-    stream_t *s;
-    assert( p_source != NULL );
+    module_t *module;
+};
 
-    s = stream_CommonNew( VLC_OBJECT( p_source ) );
+static void StreamDelete(stream_t *s)
+{
+    struct vlc_stream_filter_private *priv = vlc_stream_Private(s);
+
+    module_unneed(s, priv->module);
+    vlc_stream_Delete(s->s);
+    free(s->psz_filepath);
+}
+
+stream_t *vlc_stream_FilterNew( stream_t *p_source,
+                                const char *psz_stream_filter )
+{
+    assert(p_source != NULL);
+
+    struct vlc_stream_filter_private *priv;
+    stream_t *s = vlc_stream_CustomNew(p_source->obj.parent, StreamDelete,
+                                       sizeof (*priv), "stream filter");
     if( s == NULL )
         return NULL;
 
+    priv = vlc_stream_Private(s);
     s->p_input = p_source->p_input;
 
-    /* */
-    s->psz_access = strdup( p_source->psz_access );
-    s->psz_path = strdup( p_source->psz_path );
-    if( !s->psz_path )
+    if( p_source->psz_url != NULL )
     {
-        stream_CommonDelete( s );
-        return NULL;
+        s->psz_url = strdup( p_source->psz_url );
+        if( unlikely(s->psz_url == NULL) )
+            goto error;
+
+        if( p_source->psz_filepath != NULL )
+            s->psz_filepath = strdup( p_source->psz_filepath );
     }
-    s->p_source = p_source;
+    s->s = p_source;
 
     /* */
-    s->p_module = module_need( s, "stream_filter", psz_stream_filter, true );
-
-    if( !s->p_module )
-    {
-        stream_CommonDelete( s );
-        return NULL;
-    }
-
-    s->pf_destroy = StreamDelete;
+    priv->module = module_need(s, "stream_filter", psz_stream_filter, true);
+    if (priv->module == NULL)
+        goto error;
 
     return s;
+error:
+    free(s->psz_filepath);
+    stream_CommonDelete( s );
+    return NULL;
 }
 
-stream_t *stream_FilterChainNew( stream_t *p_source,
-                                 const char *psz_chain,
-                                 bool b_record )
+/* Add automatic stream filter */
+stream_t *stream_FilterAutoNew( stream_t *p_source )
 {
-    /* Add auto stream filter */
-    for( ;; )
+    /* Limit number of entries to avoid infinite recursion. */
+    for( unsigned i = 0; i < 16; i++ )
     {
-        stream_t *p_filter = stream_FilterNew( p_source, NULL );
-        if( !p_filter )
+        stream_t *p_filter = vlc_stream_FilterNew( p_source, NULL );
+        if( p_filter == NULL )
             break;
 
-        msg_Dbg( p_filter, "Inserted a stream filter" );
+        msg_Dbg( p_filter, "stream filter added to %p", (void *)p_source );
         p_source = p_filter;
-    }
-
-    /* Add user stream filter */
-    char *psz_tmp = psz_chain ? strdup( psz_chain ) : NULL;
-    char *psz = psz_tmp;
-    while( psz && *psz )
-    {
-        stream_t *p_filter;
-        char *psz_end = strchr( psz, ':' );
-
-        if( psz_end )
-            *psz_end++ = '\0';
-
-        p_filter = stream_FilterNew( p_source, psz );
-        if( p_filter )
-            p_source = p_filter;
-        else
-            msg_Warn( p_source, "failed to insert stream filter %s", psz );
-
-        psz = psz_end;
-    }
-    free( psz_tmp );
-
-    /* Add record filter if useful */
-    if( b_record )
-    {
-        stream_t *p_filter = stream_FilterNew( p_source, "record" );
-        if( p_filter )
-            p_source = p_filter;
     }
     return p_source;
 }
 
-static void StreamDelete( stream_t *s )
+/* Add specified stream filter(s) */
+stream_t *stream_FilterChainNew( stream_t *p_source, const char *psz_chain )
 {
-    module_unneed( s, s->p_module );
+    /* Add user stream filter */
+    char *chain = strdup( psz_chain );
+    if( unlikely(chain == NULL) )
+        return p_source;
 
-    if( s->p_source )
-        stream_Delete( s->p_source );
+    char *buf;
+    for( const char *name = strtok_r( chain, ":", &buf );
+         name != NULL;
+         name = strtok_r( NULL, ":", &buf ) )
+    {
+        stream_t *p_filter = vlc_stream_FilterNew( p_source, name );
+        if( p_filter != NULL )
+            p_source = p_filter;
+        else
+            msg_Warn( p_source, "cannot insert stream filter %s", name );
+    }
+    free( chain );
 
-    stream_CommonDelete( s );
+    return p_source;
 }

@@ -70,8 +70,8 @@ motion_sensors_t *motion_create( vlc_object_t *obj )
         return NULL;
     }
 
-    if( access( "/sys/devices/platform/hdaps/position", R_OK ) == 0 
-        && ( f = fopen( "/sys/devices/platform/hdaps/calibrate", "r" ) ) )
+    if( access( "/sys/devices/platform/hdaps/position", R_OK ) == 0
+        && ( f = fopen( "/sys/devices/platform/hdaps/calibrate", "re" ) ) )
     {
         /* IBM HDAPS support */
         motion->i_calibrate = fscanf( f, "(%d,%d)", &i_x, &i_y ) == 2 ? i_x: 0;
@@ -85,8 +85,8 @@ motion_sensors_t *motion_create( vlc_object_t *obj )
         motion->sensor = AMS_SENSOR;
         msg_Dbg( obj, "AMS motion detection correctly loaded" );
     }
-    else if( access( "/sys/devices/platform/applesmc.768/position", R_OK ) == 0 
-             && ( f = fopen( "/sys/devices/platform/applesmc.768/calibrate", "r" ) ) )
+    else if( access( "/sys/devices/platform/applesmc.768/position", R_OK ) == 0
+             && ( f = fopen( "/sys/devices/platform/applesmc.768/calibrate", "re" ) ) )
     {
         /* Apple SMC (newer macbooks) */
         /* Should be factorised with HDAPS */
@@ -133,7 +133,7 @@ static int GetOrientation( motion_sensors_t *motion )
     switch( motion->sensor )
     {
     case HDAPS_SENSOR:
-        f = fopen( "/sys/devices/platform/hdaps/position", "r" );
+        f = fopen( "/sys/devices/platform/hdaps/position", "re" );
         if( !f )
         {
             return 0;
@@ -148,7 +148,7 @@ static int GetOrientation( motion_sensors_t *motion )
             return ( i_x - motion->i_calibrate ) * 10;
 
     case AMS_SENSOR:
-        f = fopen( "/sys/devices/ams/x", "r" );
+        f = fopen( "/sys/devices/ams/x", "re" );
         if( !f )
         {
             return 0;
@@ -163,7 +163,7 @@ static int GetOrientation( motion_sensors_t *motion )
             return - i_x * 30; /* FIXME: arbitrary */
 
     case APPLESMC_SENSOR:
-        f = fopen( "/sys/devices/platform/applesmc.768/position", "r" );
+        f = fopen( "/sys/devices/platform/applesmc.768/position", "re" );
         if( !f )
         {
             return 0;
@@ -194,7 +194,7 @@ static int GetOrientation( motion_sensors_t *motion )
             return 0;
 #endif
     default:
-        assert( 0 );
+        vlc_assert_unreachable();
     }
 }
 

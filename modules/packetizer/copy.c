@@ -61,6 +61,7 @@ struct decoder_sys_t
 
 static block_t *Packetize   ( decoder_t *, block_t ** );
 static block_t *PacketizeSub( decoder_t *, block_t ** );
+static void Flush( decoder_t * );
 
 static void ParseWMV3( decoder_t *, block_t * );
 
@@ -87,23 +88,12 @@ static int Open( vlc_object_t *p_this )
         p_dec->pf_packetize = PacketizeSub;
     else
         p_dec->pf_packetize = Packetize;
-
-    /* Create the output format */
-    es_format_Copy( &p_dec->fmt_out, &p_dec->fmt_in );
-
-    /* Fix the value of the fourcc for audio */
-    if( p_dec->fmt_in.i_cat == AUDIO_ES )
-    {
-        p_dec->fmt_out.i_codec = vlc_fourcc_GetCodecAudio( p_dec->fmt_in.i_codec,
-                                                           p_dec->fmt_in.audio.i_bitspersample );
-        if( !p_dec->fmt_out.i_codec )
-        {
-            msg_Err( p_dec, "unknown raw audio sample size" );
-            return VLC_EGENERIC;
-        }
-    }
+    p_dec->pf_flush = Flush;
 
     p_dec->p_sys = p_sys = malloc( sizeof(*p_sys) );
+    if (unlikely(p_sys == NULL))
+        return VLC_ENOMEM;
+
     p_sys->p_block    = NULL;
     switch( p_dec->fmt_in.i_codec )
     {
@@ -115,6 +105,24 @@ static int Open( vlc_object_t *p_this )
         break;
     }
 
+    vlc_fourcc_t fcc = p_dec->fmt_in.i_codec;
+    /* Fix the value of the fourcc for audio */
+    if( p_dec->fmt_in.i_cat == AUDIO_ES )
+    {
+        fcc = vlc_fourcc_GetCodecAudio( p_dec->fmt_in.i_codec,
+                                                     p_dec->fmt_in.audio.i_bitspersample );
+        if( !fcc )
+        {
+            msg_Err( p_dec, "unknown raw audio sample size" );
+            free( p_sys );
+            return VLC_EGENERIC;
+        }
+    }
+
+    /* Create the output format */
+    es_format_Copy( &p_dec->fmt_out, &p_dec->fmt_in );
+    p_dec->fmt_out.i_codec = fcc;
+
     return VLC_SUCCESS;
 }
 
@@ -124,14 +132,25 @@ static int Open( vlc_object_t *p_this )
 static void Close( vlc_object_t *p_this )
 {
     decoder_t     *p_dec = (decoder_t*)p_this;
+    decoder_sys_t *p_sys = p_dec->p_sys;
 
-    if( p_dec->p_sys->p_block )
+    if( p_sys->p_block )
     {
-        block_ChainRelease( p_dec->p_sys->p_block );
+        block_ChainRelease( p_sys->p_block );
     }
 
-    es_format_Clean( &p_dec->fmt_out );
     free( p_dec->p_sys );
+}
+
+static void Flush( decoder_t *p_dec )
+{
+    decoder_sys_t *p_sys = p_dec->p_sys;
+    block_t *p_ret = p_sys->p_block;
+    if ( p_ret )
+    {
+        block_Release( p_ret );
+        p_sys->p_block = NULL;
+    }
 }
 
 /*****************************************************************************
@@ -140,11 +159,12 @@ static void Close( vlc_object_t *p_this )
 static block_t *Packetize ( decoder_t *p_dec, block_t **pp_block )
 {
     block_t *p_block;
-    block_t *p_ret = p_dec->p_sys->p_block;
+    decoder_sys_t *p_sys = p_dec->p_sys;
+    block_t *p_ret = p_sys->p_block;
 
     if( pp_block == NULL || *pp_block == NULL )
         return NULL;
-    if( (*pp_block)->i_flags&(BLOCK_FLAG_DISCONTINUITY|BLOCK_FLAG_CORRUPTED) )
+    if( (*pp_block)->i_flags&(BLOCK_FLAG_CORRUPTED) )
     {
         block_Release( *pp_block );
         return NULL;
@@ -170,10 +190,10 @@ static block_t *Packetize ( decoder_t *p_dec, block_t **pp_block )
         if (p_dec->fmt_in.i_codec != VLC_CODEC_OPUS)
             p_ret->i_length = p_block->i_pts - p_ret->i_pts;
     }
-    p_dec->p_sys->p_block = p_block;
+    p_sys->p_block = p_block;
 
-    if( p_ret && p_dec->p_sys->pf_parse )
-        p_dec->p_sys->pf_parse( p_dec, p_ret );
+    if( p_ret && p_sys->pf_parse )
+        p_sys->pf_parse( p_dec, p_ret );
     return p_ret;
 }
 
@@ -186,7 +206,7 @@ static block_t *PacketizeSub( decoder_t *p_dec, block_t **pp_block )
 
     if( pp_block == NULL || *pp_block == NULL )
         return NULL;
-    if( (*pp_block)->i_flags&(BLOCK_FLAG_DISCONTINUITY|BLOCK_FLAG_CORRUPTED) )
+    if( (*pp_block)->i_flags&(BLOCK_FLAG_CORRUPTED) )
     {
         block_Release( *pp_block );
         return NULL;

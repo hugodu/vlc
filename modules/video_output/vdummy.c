@@ -102,7 +102,8 @@ static int Open(vlc_object_t *object,
     vd->prepare = NULL;
     vd->display = display;
     vd->control = Control;
-    vd->manage  = NULL;
+
+    vout_display_DeleteWindow(vd, NULL);
 
     return VLC_SUCCESS;
 }
@@ -123,7 +124,7 @@ static void Close(vlc_object_t *object)
     vout_display_sys_t *sys = vd->sys;
 
     if (sys->pool)
-        picture_pool_Delete(sys->pool);
+        picture_pool_Release(sys->pool);
     free(sys);
 }
 
@@ -144,11 +145,15 @@ static void Display(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
 
 static void DisplayStat(vout_display_t *vd, picture_t *picture, subpicture_t *subpicture)
 {
+    plane_t *p = picture->p;
+
     VLC_UNUSED(vd);
     VLC_UNUSED(subpicture);
-    if (vd->fmt.i_width*vd->fmt.i_height >= sizeof(mtime_t)) {
+
+    if (vd->fmt.i_width * vd->fmt.i_height >= sizeof (mtime_t)
+     && (p->i_pitch * p->i_lines) >= (ssize_t)sizeof (mtime_t)) {
         mtime_t date;
-        memcpy(&date, picture->p->p_pixels, sizeof(date));
+        memcpy(&date, p->p_pixels, sizeof(date));
         msg_Dbg(vd, "VOUT got %"PRIu64" ms offset",
                 (mdate() - date) / 1000 );
     }

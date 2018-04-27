@@ -1,27 +1,28 @@
 /*****************************************************************************
  * transcode.c: transcoding stream output module
  *****************************************************************************
- * Copyright (C) 2003-2009 the VideoLAN team
+ * Copyright (C) 2003-2009 VLC authors and VideoLAN
  * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Gildas Bazin <gbazin@videolan.org>
  *          Jean-Paul Saman <jpsaman #_at_# m2x dot nl>
  *          Antoine Cellerier <dionoea at videolan dot org>
+ *          Ilkka Ollakka <ileoo at videolan dot org>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 
 /*****************************************************************************
@@ -114,14 +115,10 @@
 
 #define SFILTER_TEXT N_("Overlays")
 #define SFILTER_LONGTEXT N_( \
-    "This allows you to add overlays (also known as \"subpictures\" on the "\
+    "This allows you to add overlays (also known as \"subpictures\") on the "\
     "transcoded video stream. The subpictures produced by the filters will "\
     "be overlayed directly onto the video. You can specify a colon-separated "\
-    "list of subpicture modules" )
-
-#define OSD_TEXT N_("OSD menu")
-#define OSD_LONGTEXT N_(\
-    "Stream the On Screen Display menu (using the osdmenu subpicture module)." )
+    "list of subpicture modules." )
 
 #define THREADS_TEXT N_("Number of threads")
 #define THREADS_LONGTEXT N_( \
@@ -130,15 +127,10 @@
 #define HP_LONGTEXT N_( \
     "Runs the optional encoder thread at the OUTPUT priority instead of " \
     "VIDEO." )
+#define POOL_TEXT N_("Picture pool size")
+#define POOL_LONGTEXT N_( "Defines how many pictures we allow to be in pool "\
+    "between decoder/encoder threads when threads > 0" )
 
-#define ASYNC_TEXT N_("Synchronise on audio track")
-#define ASYNC_LONGTEXT N_( \
-    "This option will drop/duplicate video frames to synchronise the video " \
-    "track on the audio track." )
-
-#define HURRYUP_TEXT N_( "Hurry up" )
-#define HURRYUP_LONGTEXT N_( "The transcoder will drop frames if your CPU " \
-                "can't keep up with the encoding rate." )
 
 static const char *const ppsz_deinterlace_type[] =
 {
@@ -159,18 +151,17 @@ vlc_module_begin ()
     set_category( CAT_SOUT )
     set_subcategory( SUBCAT_SOUT_STREAM )
     set_section( N_("Video"), NULL )
-    add_module( SOUT_CFG_PREFIX "venc", "encoder", NULL, VENC_TEXT,
-                VENC_LONGTEXT, false )
+    add_module(SOUT_CFG_PREFIX "venc", "encoder", NULL,
+               VENC_TEXT, VENC_LONGTEXT)
     add_string( SOUT_CFG_PREFIX "vcodec", NULL, VCODEC_TEXT,
                 VCODEC_LONGTEXT, false )
     add_integer( SOUT_CFG_PREFIX "vb", 0, VB_TEXT,
                  VB_LONGTEXT, false )
     add_float( SOUT_CFG_PREFIX "scale", 0, SCALE_TEXT,
                SCALE_LONGTEXT, false )
-    add_float( SOUT_CFG_PREFIX "fps", 0, FPS_TEXT,
+    add_string( SOUT_CFG_PREFIX "fps", NULL, FPS_TEXT,
                FPS_LONGTEXT, false )
-    add_bool( SOUT_CFG_PREFIX "hurry-up", false, HURRYUP_TEXT,
-               HURRYUP_LONGTEXT, false )
+    add_obsolete_bool( SOUT_CFG_PREFIX "hurry-up"); /* Since 2.2.0 */
     add_bool( SOUT_CFG_PREFIX "deinterlace", false, DEINTERLACE_TEXT,
               DEINTERLACE_LONGTEXT, false )
     add_string( SOUT_CFG_PREFIX "deinterlace-module", "deinterlace",
@@ -185,12 +176,12 @@ vlc_module_begin ()
                  MAXWIDTH_LONGTEXT, true )
     add_integer( SOUT_CFG_PREFIX "maxheight", 0, MAXHEIGHT_TEXT,
                  MAXHEIGHT_LONGTEXT, true )
-    add_module_list( SOUT_CFG_PREFIX "vfilter", "video filter2",
-                     NULL, VFILTER_TEXT, VFILTER_LONGTEXT, false )
+    add_module_list(SOUT_CFG_PREFIX "vfilter", "video filter", NULL,
+                    VFILTER_TEXT, VFILTER_LONGTEXT)
 
     set_section( N_("Audio"), NULL )
-    add_module( SOUT_CFG_PREFIX "aenc", "encoder", NULL, AENC_TEXT,
-                AENC_LONGTEXT, false )
+    add_module(SOUT_CFG_PREFIX "aenc", "encoder", NULL,
+               AENC_TEXT, AENC_LONGTEXT)
     add_string( SOUT_CFG_PREFIX "acodec", NULL, ACODEC_TEXT,
                 ACODEC_LONGTEXT, false )
     add_integer( SOUT_CFG_PREFIX "ab", 96, AB_TEXT,
@@ -199,30 +190,29 @@ vlc_module_begin ()
                 ALANG_LONGTEXT, true )
     add_integer( SOUT_CFG_PREFIX "channels", 0, ACHANS_TEXT,
                  ACHANS_LONGTEXT, false )
+        change_integer_range( 0, 9 )
     add_integer( SOUT_CFG_PREFIX "samplerate", 0, ARATE_TEXT,
                  ARATE_LONGTEXT, true )
-    add_bool( SOUT_CFG_PREFIX "audio-sync", false, ASYNC_TEXT,
-              ASYNC_LONGTEXT, false )
-    add_module_list( SOUT_CFG_PREFIX "afilter",  "audio filter",
-                     NULL, AFILTER_TEXT, AFILTER_LONGTEXT, false )
+        change_integer_range( 0, 48000 )
+    add_obsolete_bool( SOUT_CFG_PREFIX "audio-sync" ) /*Since 2.2.0 */
+    add_module_list(SOUT_CFG_PREFIX "afilter",  "audio filter", NULL,
+                    AFILTER_TEXT, AFILTER_LONGTEXT)
 
     set_section( N_("Overlays/Subtitles"), NULL )
-    add_module( SOUT_CFG_PREFIX "senc", "encoder", NULL, SENC_TEXT,
-                SENC_LONGTEXT, false )
+    add_module(SOUT_CFG_PREFIX "senc", "encoder", NULL,
+               SENC_TEXT, SENC_LONGTEXT)
     add_string( SOUT_CFG_PREFIX "scodec", NULL, SCODEC_TEXT,
                 SCODEC_LONGTEXT, false )
     add_bool( SOUT_CFG_PREFIX "soverlay", false, SCODEC_TEXT,
                SCODEC_LONGTEXT, false )
-    add_module_list( SOUT_CFG_PREFIX "sfilter", "video filter",
-                     NULL, SFILTER_TEXT, SFILTER_LONGTEXT, false )
-
-    set_section( N_("On Screen Display"), NULL )
-    add_bool( SOUT_CFG_PREFIX "osd", false, OSD_TEXT,
-              OSD_LONGTEXT, false )
+    add_module_list(SOUT_CFG_PREFIX "sfilter", "spu source", NULL,
+                    SFILTER_TEXT, SFILTER_LONGTEXT)
 
     set_section( N_("Miscellaneous"), NULL )
     add_integer( SOUT_CFG_PREFIX "threads", 0, THREADS_TEXT,
                  THREADS_LONGTEXT, true )
+    add_integer( SOUT_CFG_PREFIX "pool-size", 10, POOL_TEXT, POOL_LONGTEXT, true )
+        change_integer_range( 1, 1000 )
     add_bool( SOUT_CFG_PREFIX "high-priority", false, HP_TEXT, HP_LONGTEXT,
               true )
 
@@ -231,18 +221,18 @@ vlc_module_end ()
 static const char *const ppsz_sout_options[] = {
     "venc", "vcodec", "vb",
     "scale", "fps", "width", "height", "vfilter", "deinterlace",
-    "deinterlace-module", "threads", "hurry-up", "aenc", "acodec", "ab", "alang",
+    "deinterlace-module", "threads", "aenc", "acodec", "ab", "alang",
     "afilter", "samplerate", "channels", "senc", "scodec", "soverlay",
-    "sfilter", "osd", "audio-sync", "high-priority", "maxwidth", "maxheight",
+    "sfilter", "high-priority", "maxwidth", "maxheight", "pool-size",
     NULL
 };
 
 /*****************************************************************************
  * Exported prototypes
  *****************************************************************************/
-static sout_stream_id_t *Add ( sout_stream_t *, es_format_t * );
-static int               Del ( sout_stream_t *, sout_stream_id_t * );
-static int               Send( sout_stream_t *, sout_stream_id_t *, block_t* );
+static sout_stream_id_sys_t *Add( sout_stream_t *, const es_format_t * );
+static void              Del ( sout_stream_t *, sout_stream_id_sys_t * );
+static int               Send( sout_stream_t *, sout_stream_id_sys_t *, block_t* );
 
 /*****************************************************************************
  * Open:
@@ -281,9 +271,10 @@ static int Open( vlc_object_t *p_this )
     p_sys->i_acodec = 0;
     if( psz_string && *psz_string )
     {
-        char fcc[4] = "    ";
+        char fcc[5] = "    \0";
         memcpy( fcc, psz_string, __MIN( strlen( psz_string ), 4 ) );
-        p_sys->i_acodec = VLC_FOURCC( fcc[0], fcc[1], fcc[2], fcc[3] );
+        p_sys->i_acodec = vlc_fourcc_GetCodecFromString( AUDIO_ES, fcc );
+        msg_Dbg( p_stream, "Checking codec mapping for %s got %4.4s ", fcc, (char*)&p_sys->i_acodec);
     }
     free( psz_string );
 
@@ -335,9 +326,10 @@ static int Open( vlc_object_t *p_this )
     p_sys->i_vcodec = 0;
     if( psz_string && *psz_string )
     {
-        char fcc[4] = "    ";
+        char fcc[5] = "    \0";
         memcpy( fcc, psz_string, __MIN( strlen( psz_string ), 4 ) );
-        p_sys->i_vcodec = VLC_FOURCC( fcc[0], fcc[1], fcc[2], fcc[3] );
+        p_sys->i_vcodec = vlc_fourcc_GetCodecFromString( VIDEO_ES, fcc );
+        msg_Dbg( p_stream, "Checking video codec mapping for %s got %4.4s ", fcc, (char*)&p_sys->i_vcodec);
     }
     free( psz_string );
 
@@ -346,9 +338,7 @@ static int Open( vlc_object_t *p_this )
 
     p_sys->f_scale = var_GetFloat( p_stream, SOUT_CFG_PREFIX "scale" );
 
-    p_sys->f_fps = var_GetFloat( p_stream, SOUT_CFG_PREFIX "fps" );
-
-    p_sys->b_hurry_up = var_GetBool( p_stream, SOUT_CFG_PREFIX "hurry-up" );
+    p_sys->b_master_sync = var_InheritURational( p_stream, &p_sys->fps_num, &p_sys->fps_den, SOUT_CFG_PREFIX "fps" ) == VLC_SUCCESS;
 
     p_sys->i_width = var_GetInteger( p_stream, SOUT_CFG_PREFIX "width" );
 
@@ -365,22 +355,18 @@ static int Open( vlc_object_t *p_this )
         p_sys->psz_vf2 = NULL;
     free( psz_string );
 
-    p_sys->b_deinterlace = var_GetBool( p_stream, SOUT_CFG_PREFIX "deinterlace" );
+    if( var_GetBool( p_stream, SOUT_CFG_PREFIX "deinterlace" ) )
+        psz_string = var_GetString( p_stream,
+                                    SOUT_CFG_PREFIX "deinterlace-module" );
+    else
+        psz_string = NULL;
 
-    psz_string = var_GetString( p_stream, SOUT_CFG_PREFIX "deinterlace-module" );
-    p_sys->psz_deinterlace = NULL;
-    p_sys->p_deinterlace_cfg = NULL;
-    if( psz_string && *psz_string )
-    {
-        char *psz_next;
-        psz_next = config_ChainCreate( &p_sys->psz_deinterlace,
-                                   &p_sys->p_deinterlace_cfg,
-                                   psz_string );
-        free( psz_next );
-    }
+    free( config_ChainCreate( &p_sys->psz_deinterlace,
+                              &p_sys->p_deinterlace_cfg, psz_string ) );
     free( psz_string );
 
     p_sys->i_threads = var_GetInteger( p_stream, SOUT_CFG_PREFIX "threads" );
+    p_sys->pool_size = var_GetInteger( p_stream, SOUT_CFG_PREFIX "pool-size" );
     p_sys->b_high_priority = var_GetBool( p_stream, SOUT_CFG_PREFIX "high-priority" );
 
     if( p_sys->i_vcodec )
@@ -410,9 +396,10 @@ static int Open( vlc_object_t *p_this )
     psz_string = var_GetString( p_stream, SOUT_CFG_PREFIX "scodec" );
     if( psz_string && *psz_string )
     {
-        char fcc[4] = "    ";
+        char fcc[5] = "    \0";
         memcpy( fcc, psz_string, __MIN( strlen( psz_string ), 4 ) );
-        p_sys->i_scodec = VLC_FOURCC( fcc[0], fcc[1], fcc[2], fcc[3] );
+        p_sys->i_scodec = vlc_fourcc_GetCodecFromString( SPU_ES, fcc );
+        msg_Dbg( p_stream, "Checking spu codec mapping for %s got %4.4s ", fcc, (char*)&p_sys->i_scodec);
     }
     free( psz_string );
 
@@ -422,49 +409,18 @@ static int Open( vlc_object_t *p_this )
     }
 
     p_sys->b_soverlay = var_GetBool( p_stream, SOUT_CFG_PREFIX "soverlay" );
+    /* Set default size for TEXT spu non overlay conversion / updater */
+    p_sys->i_spu_width = (p_sys->i_width) ? p_sys->i_width : 1280;
+    p_sys->i_spu_height = (p_sys->i_height) ? p_sys->i_height : 720;
 
     psz_string = var_GetString( p_stream, SOUT_CFG_PREFIX "sfilter" );
     if( psz_string && *psz_string )
     {
-        p_sys->p_spu = spu_Create( p_stream );
+        p_sys->p_spu = spu_Create( p_stream, NULL );
         if( p_sys->p_spu )
             spu_ChangeSources( p_sys->p_spu, psz_string );
     }
     free( psz_string );
-
-    /* OSD menu transcoding parameters */
-    p_sys->psz_osdenc = NULL;
-    p_sys->p_osd_cfg  = NULL;
-    p_sys->i_osdcodec = 0;
-    p_sys->b_osd   = var_GetBool( p_stream, SOUT_CFG_PREFIX "osd" );
-
-    if( p_sys->b_osd )
-    {
-        char *psz_next;
-
-        psz_next = config_ChainCreate( &p_sys->psz_osdenc,
-                                   &p_sys->p_osd_cfg, strdup( "dvbsub") );
-        free( psz_next );
-
-        p_sys->i_osdcodec = VLC_CODEC_YUVP;
-
-        msg_Dbg( p_stream, "codec osd=%4.4s", (char *)&p_sys->i_osdcodec );
-
-        if( !p_sys->p_spu )
-        {
-            p_sys->p_spu = spu_Create( p_stream );
-            if( p_sys->p_spu )
-                spu_ChangeSources( p_sys->p_spu, "osdmenu" );
-        }
-        else
-        {
-            spu_ChangeSources( p_sys->p_spu, "osdmenu" );
-        }
-    }
-
-    /* Audio settings */
-    p_sys->b_master_sync = var_GetBool( p_stream, SOUT_CFG_PREFIX "audio-sync" );
-    if( p_sys->f_fps > 0 ) p_sys->b_master_sync = true;
 
     p_stream->pf_add    = Add;
     p_stream->pf_del    = Del;
@@ -502,21 +458,43 @@ static void Close( vlc_object_t * p_this )
     if( p_sys->p_spu ) spu_Destroy( p_sys->p_spu );
     if( p_sys->p_spu_blend ) filter_DeleteBlend( p_sys->p_spu_blend );
 
-    config_ChainDestroy( p_sys->p_osd_cfg );
-    free( p_sys->psz_osdenc );
-
     free( p_sys );
 }
 
-static sout_stream_id_t *Add( sout_stream_t *p_stream, es_format_t *p_fmt )
+static void DeleteSoutStreamID( sout_stream_id_sys_t *id )
+{
+    if( id )
+    {
+        if( id->p_decoder )
+        {
+            es_format_Clean( &id->p_decoder->fmt_in );
+            es_format_Clean( &id->p_decoder->fmt_out );
+            vlc_object_release( id->p_decoder );
+        }
+
+        if( id->p_encoder )
+        {
+            es_format_Clean( &id->p_encoder->fmt_in );
+            es_format_Clean( &id->p_encoder->fmt_out );
+            vlc_object_release( id->p_encoder );
+        }
+
+        vlc_mutex_destroy(&id->fifo.lock);
+        free( id );
+    }
+}
+
+static sout_stream_id_sys_t *Add( sout_stream_t *p_stream,
+                                  const es_format_t *p_fmt )
 {
     sout_stream_sys_t *p_sys = p_stream->p_sys;
-    sout_stream_id_t *id;
+    sout_stream_id_sys_t *id;
 
-    id = calloc( 1, sizeof( sout_stream_id_t ) );
+    id = calloc( 1, sizeof( sout_stream_id_sys_t ) );
     if( !id )
         goto error;
 
+    vlc_mutex_init(&id->fifo.lock);
     id->id = NULL;
     id->p_decoder = NULL;
     id->p_encoder = NULL;
@@ -526,8 +504,9 @@ static sout_stream_id_t *Add( sout_stream_t *p_stream, es_format_t *p_fmt )
     if( !id->p_decoder )
         goto error;
     id->p_decoder->p_module = NULL;
-    id->p_decoder->fmt_in = *p_fmt;
-    id->p_decoder->b_pace_control = true;
+    es_format_Init( &id->p_decoder->fmt_out, p_fmt->i_cat, 0 );
+    es_format_Copy( &id->p_decoder->fmt_in, p_fmt );
+    id->p_decoder->b_frame_drop_allowed = false;
 
     /* Create encoder object */
     id->p_encoder = sout_EncoderCreate( p_stream );
@@ -536,6 +515,7 @@ static sout_stream_id_t *Add( sout_stream_t *p_stream, es_format_t *p_fmt )
     id->p_encoder->p_module = NULL;
 
     /* Create destination format */
+    es_format_Init( &id->p_encoder->fmt_in, p_fmt->i_cat, 0 );
     es_format_Init( &id->p_encoder->fmt_out, p_fmt->i_cat, 0 );
     id->p_encoder->fmt_out.i_id    = p_fmt->i_id;
     id->p_encoder->fmt_out.i_group = p_fmt->i_group;
@@ -547,15 +527,13 @@ static sout_stream_id_t *Add( sout_stream_t *p_stream, es_format_t *p_fmt )
 
     bool success;
 
-    if( p_fmt->i_cat == AUDIO_ES && (p_sys->i_acodec || p_sys->psz_aenc) )
+    if( p_fmt->i_cat == AUDIO_ES && p_sys->i_acodec )
         success = transcode_audio_add(p_stream, p_fmt, id);
-    else if( p_fmt->i_cat == VIDEO_ES && (p_sys->i_vcodec || p_sys->psz_venc) )
+    else if( p_fmt->i_cat == VIDEO_ES && p_sys->i_vcodec )
         success = transcode_video_add(p_stream, p_fmt, id);
     else if( ( p_fmt->i_cat == SPU_ES ) &&
-             ( p_sys->i_scodec || p_sys->psz_senc || p_sys->b_soverlay ) )
+             ( p_sys->i_scodec || p_sys->b_soverlay ) )
         success = transcode_spu_add(p_stream, p_fmt, id);
-    else if( !p_sys->b_osd && (p_sys->i_osdcodec != 0 || p_sys->psz_osdenc) )
-        success = transcode_osd_add(p_stream, p_fmt, id);
     else
     {
         msg_Dbg( p_stream, "not transcoding a stream (fcc=`%4.4s')",
@@ -572,30 +550,12 @@ static sout_stream_id_t *Add( sout_stream_t *p_stream, es_format_t *p_fmt )
     return id;
 
 error:
-    if( id )
-    {
-        if( id->p_decoder )
-        {
-            vlc_object_release( id->p_decoder );
-            id->p_decoder = NULL;
-        }
-
-        if( id->p_encoder )
-        {
-            es_format_Clean( &id->p_encoder->fmt_out );
-            vlc_object_release( id->p_encoder );
-            id->p_encoder = NULL;
-        }
-
-        free( id );
-    }
+    DeleteSoutStreamID( id );
     return NULL;
 }
 
-static int Del( sout_stream_t *p_stream, sout_stream_id_t *id )
+static void Del( sout_stream_t *p_stream, sout_stream_id_sys_t *id )
 {
-    sout_stream_sys_t *p_sys = p_stream->p_sys;
-
     if( id->b_transcode )
     {
         switch( id->p_decoder->fmt_in.i_cat )
@@ -609,52 +569,42 @@ static int Del( sout_stream_t *p_stream, sout_stream_id_t *id )
             transcode_video_close( p_stream, id );
             break;
         case SPU_ES:
-            if( p_sys->b_osd )
-                transcode_osd_close( p_stream, id );
-            else
-                transcode_spu_close( p_stream, id );
+            transcode_spu_close( p_stream, id );
+            break;
+        default:
             break;
         }
     }
 
     if( id->id ) sout_StreamIdDel( p_stream->p_next, id->id );
 
-    if( id->p_decoder )
-    {
-        vlc_object_release( id->p_decoder );
-        id->p_decoder = NULL;
-    }
-
-    if( id->p_encoder )
-    {
-        es_format_Clean( &id->p_encoder->fmt_out );
-        vlc_object_release( id->p_encoder );
-        id->p_encoder = NULL;
-    }
-    free( id );
-
-    return VLC_SUCCESS;
+    DeleteSoutStreamID( id );
 }
 
-static int Send( sout_stream_t *p_stream, sout_stream_id_t *id,
+static int Send( sout_stream_t *p_stream, sout_stream_id_sys_t *id,
                  block_t *p_buffer )
 {
-    sout_stream_sys_t *p_sys = p_stream->p_sys;
     block_t *p_out = NULL;
+
+    if( id->b_error )
+        goto error;
 
     if( !id->b_transcode )
     {
         if( id->id )
             return sout_StreamIdSend( p_stream->p_next, id->id, p_buffer );
-
-        block_Release( p_buffer );
-        return VLC_EGENERIC;
+        else
+            goto error;
     }
 
     switch( id->p_decoder->fmt_in.i_cat )
     {
     case AUDIO_ES:
-        transcode_audio_process( p_stream, id, p_buffer, &p_out );
+        if( transcode_audio_process( p_stream, id, p_buffer, &p_out )
+            != VLC_SUCCESS )
+        {
+            return VLC_EGENERIC;
+        }
         break;
 
     case VIDEO_ES:
@@ -666,16 +616,7 @@ static int Send( sout_stream_t *p_stream, sout_stream_id_t *id,
         break;
 
     case SPU_ES:
-        /* Transcode OSD menu pictures. */
-        if( p_sys->b_osd )
-        {
-            if( transcode_osd_process( p_stream, id, p_buffer, &p_out ) !=
-                VLC_SUCCESS )
-            {
-                return VLC_EGENERIC;
-            }
-        }
-        else if ( transcode_spu_process( p_stream, id, p_buffer, &p_out ) !=
+        if ( transcode_spu_process( p_stream, id, p_buffer, &p_out ) !=
             VLC_SUCCESS )
         {
             return VLC_EGENERIC;
@@ -683,12 +624,14 @@ static int Send( sout_stream_t *p_stream, sout_stream_id_t *id,
         break;
 
     default:
-        p_out = NULL;
-        block_Release( p_buffer );
-        break;
+        goto error;
     }
 
     if( p_out )
         return sout_StreamIdSend( p_stream->p_next, id->id, p_out );
     return VLC_SUCCESS;
+error:
+    if( p_buffer )
+        block_Release( p_buffer );
+    return VLC_EGENERIC;
 }

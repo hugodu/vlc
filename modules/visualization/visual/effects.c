@@ -30,13 +30,14 @@
 #endif
 
 #include <vlc_common.h>
-#include <vlc_vout.h>
-#include <vlc_aout.h>
+#include <vlc_picture.h>
+#include <vlc_block.h>
 
 #include "visual.h"
 #include <math.h>
 
 #include "fft.h"
+#include "window.h"
 
 #define PEAK_SPEED 1
 #define BAR_DECREASE_SPEED 5
@@ -72,6 +73,8 @@ typedef struct spectrum_data
 
     unsigned i_prev_nb_samples;
     int16_t *p_prev_s16_buff;
+
+    window_param wind_param;
 } spectrum_data;
 
 static int spectrum_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
@@ -102,6 +105,7 @@ static int spectrum_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
     const int *xscale;
 
     fft_state *p_state;                 /* internal FFT data */
+    DEFINE_WIND_CONTEXT( wind_ctx );    /* internal window data */
 
     int i , j , y , k;
     int i_line;
@@ -115,6 +119,11 @@ static int spectrum_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
     int16_t  *p_buffs;                    /* int16_t converted buffer */
     int16_t  *p_s16_buff;                 /* int16_t converted buffer */
 
+    if (!p_buffer->i_nb_samples) {
+        msg_Err(p_aout, "no samples yet");
+        return -1;
+    }
+
     /* Create p_data if needed */
     if( !p_data )
     {
@@ -127,6 +136,8 @@ static int spectrum_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
 
         p_data->i_prev_nb_samples = 0;
         p_data->p_prev_s16_buff = NULL;
+
+        window_get_param( p_aout, &p_data->wind_param );
     }
     peaks = (int *)p_data->peaks;
     prev_heights = (int *)p_data->prev_heights;
@@ -135,9 +146,9 @@ static int spectrum_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
     if( p_buffer->i_nb_samples != p_data->i_prev_nb_samples )
     {
         free( p_data->p_prev_s16_buff );
-        p_data->p_prev_s16_buff = malloc( p_buffer->i_nb_samples *
-                                          p_effect->i_nb_chans *
-                                          sizeof(int16_t));
+        p_data->p_prev_s16_buff = vlc_alloc( p_buffer->i_nb_samples *
+                                             p_effect->i_nb_chans,
+                                             sizeof(int16_t));
         p_data->i_prev_nb_samples = p_buffer->i_nb_samples;
         if( !p_data->p_prev_s16_buff )
             return -1;
@@ -158,7 +169,7 @@ static int spectrum_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
         i_nb_bands = 20;
     }
 
-    height = malloc( i_nb_bands * sizeof(int) );
+    height = vlc_alloc( i_nb_bands, sizeof(int) );
     if( !height )
     {
         return -1;
@@ -182,6 +193,13 @@ static int spectrum_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
         msg_Err(p_aout,"unable to initialize FFT transform");
         return -1;
     }
+    if( !window_init( FFT_BUFFER_SIZE, &p_data->wind_param, &wind_ctx ) )
+    {
+        fft_close( p_state );
+        free( height );
+        msg_Err(p_aout,"unable to initialize FFT window");
+        return -1;
+    }
     p_buffs = p_s16_buff;
     for ( i = 0 ; i < FFT_BUFFER_SIZE ; i++)
     {
@@ -193,6 +211,7 @@ static int spectrum_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
             p_buffs = p_s16_buff;
 
     }
+    window_scale_in_place( p_buffer1, &wind_ctx );
     fft_perform( p_buffer1, p_output, p_state);
     for( i = 0; i< FFT_BUFFER_SIZE ; i++ )
         p_dest[i] = p_output[i] *  ( 2 ^ 16 ) / ( ( FFT_BUFFER_SIZE / 2 * 32768 ) ^ 2 );
@@ -340,6 +359,8 @@ static int spectrum_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
         }
     }
 
+    window_close( &wind_ctx );
+
     fft_close( p_state );
 
     free( height );
@@ -370,6 +391,8 @@ typedef struct
 
     unsigned i_prev_nb_samples;
     int16_t *p_prev_s16_buff;
+
+    window_param wind_param;
 } spectrometer_data;
 
 static int spectrometer_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
@@ -420,6 +443,7 @@ static int spectrometer_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
     const double y_scale =  3.60673760222;  /* (log 256) */
 
     fft_state *p_state;                 /* internal FFT data */
+    DEFINE_WIND_CONTEXT( wind_ctx );    /* internal window data */
 
     int i , j , k;
     int i_line = 0;
@@ -431,6 +455,11 @@ static int spectrometer_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
 
     int16_t  *p_buffs;                    /* int16_t converted buffer */
     int16_t  *p_s16_buff;                /* int16_t converted buffer */
+
+    if (!p_buffer->i_nb_samples) {
+        msg_Err(p_aout, "no samples yet");
+        return -1;
+    }
 
     /* Create the data struct if needed */
     spectrometer_data *p_data = p_effect->p_data;
@@ -447,6 +476,7 @@ static int spectrometer_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
         }
         p_data->i_prev_nb_samples = 0;
         p_data->p_prev_s16_buff = NULL;
+        window_get_param( p_aout, &p_data->wind_param );
         p_effect->p_data = (void*)p_data;
     }
     peaks = p_data->peaks;
@@ -455,9 +485,9 @@ static int spectrometer_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
     if( p_buffer->i_nb_samples != p_data->i_prev_nb_samples )
     {
         free( p_data->p_prev_s16_buff );
-        p_data->p_prev_s16_buff = malloc( p_buffer->i_nb_samples *
-                                          p_effect->i_nb_chans *
-                                          sizeof(int16_t));
+        p_data->p_prev_s16_buff = vlc_alloc( p_buffer->i_nb_samples *
+                                             p_effect->i_nb_chans,
+                                             sizeof(int16_t));
         p_data->i_prev_nb_samples = p_buffer->i_nb_samples;
         if( !p_data->p_prev_s16_buff )
             return -1;
@@ -488,7 +518,7 @@ static int spectrometer_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
         i_nb_bands = 20;
     }
 
-    height = malloc( i_nb_bands * sizeof(int) );
+    height = vlc_alloc( i_nb_bands, sizeof(int) );
     if( !height)
         return -1;
 
@@ -511,6 +541,13 @@ static int spectrometer_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
         free( height );
         return -1;
     }
+    if( !window_init( FFT_BUFFER_SIZE, &p_data->wind_param, &wind_ctx ) )
+    {
+        fft_close( p_state );
+        free( height );
+        msg_Err(p_aout,"unable to initialize FFT window");
+        return -1;
+    }
     p_buffs = p_s16_buff;
     for ( i = 0 ; i < FFT_BUFFER_SIZE; i++)
     {
@@ -521,6 +558,7 @@ static int spectrometer_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
         if( p_buffs >= &p_s16_buff[p_buffer->i_nb_samples * p_effect->i_nb_chans] )
             p_buffs = p_s16_buff;
     }
+    window_scale_in_place( p_buffer1, &wind_ctx );
     fft_perform( p_buffer1, p_output, p_state);
     for(i = 0; i < FFT_BUFFER_SIZE; i++)
     {
@@ -818,6 +856,8 @@ static int spectrometer_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
         }
     }
 
+    window_close( &wind_ctx );
+
     fft_close( p_state );
 
     free( height );
@@ -905,7 +945,7 @@ static int vuMeter_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
     float i_value_l = 0;
     float i_value_r = 0;
 
-    /* Compute the peack values */
+    /* Compute the peak values */
     for ( unsigned i = 0 ; i < p_buffer->i_nb_samples; i++ )
     {
         const float *p_sample = (float *)p_buffer->p_buffer;
@@ -922,8 +962,8 @@ static int vuMeter_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
         p_sample += p_effect->i_nb_chans;
     }
 
-    i_value_l = abs(i_value_l);
-    i_value_r = abs(i_value_r);
+    i_value_l = fabsf(i_value_l);
+    i_value_r = fabsf(i_value_r);
 
     /* Stay under maximum value admited */
     if ( i_value_l > 200 * M_PI_2 )
@@ -936,7 +976,7 @@ static int vuMeter_Run(visual_effect_t * p_effect, vlc_object_t *p_aout,
     if( !p_effect->p_data )
     {
         /* Allocate memory to save hand positions */
-        p_effect->p_data = malloc( 2 * sizeof(float) );
+        p_effect->p_data = vlc_alloc( 2, sizeof(float) );
         i_value = p_effect->p_data;
         i_value[0] = i_value_l;
         i_value[1] = i_value_r;

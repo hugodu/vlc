@@ -31,7 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-
+#include <errno.h>
 #include <sys/types.h>
 #include <fcntl.h>
 
@@ -46,16 +46,16 @@
 #define VBI_DEVICE_TEXT N_("VBI capture device")
 #define VBI_DEVICE_LONGTEXT N_( \
     "The device node where VBI data can be read "   \
-    " (for closed captions) " )
+    "(for closed captions)." )
 #define STANDARD_TEXT N_( "Standard" )
 #define STANDARD_LONGTEXT N_( \
     "Video standard (Default, SECAM, PAL, or NTSC)." )
 #define CHROMA_TEXT N_("Video input chroma format")
 #define CHROMA_LONGTEXT N_( \
     "Force the Video4Linux2 video device to use a specific chroma format " \
-    "(eg. I420 or I422 for raw images, MJPG for M-JPEG compressed input) " \
-    "(Complete list: GREY, I240, RV16, RV15, RV24, RV32, YUY2, YUYV, UYVY, " \
-    "I41N, I422, I420, I411, I410, MJPG)")
+    "(eg. I420 or I422 for raw images, MJPG for M-JPEG compressed input). " \
+    "Complete list: GREY, I240, RV16, RV15, RV24, RV32, YUY2, YUYV, UYVY, " \
+    "I41N, I422, I420, I411, I410, MJPG")
 #define INPUT_TEXT N_( "Input" )
 #define INPUT_LONGTEXT N_( \
     "Input of the card to use (see debug)." )
@@ -67,14 +67,14 @@
 #define SIZE_LONGTEXT N_( \
     "The specified pixel resolution is forced " \
     "(if both width and height are strictly positive)." )
-/*#define FPS_TEXT N_( "Frame rate" )
-#define FPS_LONGTEXT N_( "Maximum frame rate to use (0 = no limits)." )*/
+#define FPS_TEXT N_( "Frame rate" )
+#define FPS_LONGTEXT N_( "Maximum frame rate to use (0 = no limits)." )
 
 #define RADIO_DEVICE_TEXT N_( "Radio device" )
 #define RADIO_DEVICE_LONGTEXT N_("Radio tuner device node." )
 #define FREQUENCY_TEXT N_("Frequency")
 #define FREQUENCY_LONGTEXT N_( \
-    "Tuner frequency in Hz or kHz (see debug output)" )
+    "Tuner frequency in Hz or kHz (see debug output)." )
 #define TUNER_AUDIO_MODE_TEXT N_("Audio mode")
 #define TUNER_AUDIO_MODE_LONGTEXT N_( \
     "Tuner audio mono/stereo and track selection." )
@@ -190,7 +190,7 @@ static const char *const colorfx_user[] = { N_("Unspecified"), N_("None"),
     "Set the v4l2 driver controls to the values specified using a comma " \
     "separated list optionally encapsulated by curly braces " \
     "(e.g.: {video_bitrate=6000000,audio_crc=0,stream_type=3} ). " \
-    "To list available controls, increase verbosity (-vvv) " \
+    "To list available controls, increase verbosity (-vv) " \
     "or use the v4l2-ctl application." )
 
 #define ASPECT_TEXT N_("Picture aspect-ratio n:m")
@@ -278,12 +278,12 @@ vlc_module_begin ()
     set_subcategory( SUBCAT_INPUT_ACCESS )
 
     set_section( N_( "Video input" ), NULL )
-    add_loadfile( CFG_PREFIX "dev", "/dev/video0",
-                  VIDEO_DEVICE_TEXT, VIDEO_DEVICE_LONGTEXT, false )
+    add_loadfile(CFG_PREFIX "dev", "/dev/video0",
+                 VIDEO_DEVICE_TEXT, VIDEO_DEVICE_LONGTEXT)
         change_safe()
 #ifdef ZVBI_COMPILED
-    add_loadfile( CFG_PREFIX "vbidev", NULL,
-                  VBI_DEVICE_TEXT, VBI_DEVICE_LONGTEXT, false )
+    add_loadfile(CFG_PREFIX "vbidev", NULL,
+                 VBI_DEVICE_TEXT, VBI_DEVICE_LONGTEXT)
 #endif
     add_string( CFG_PREFIX "standard", "",
                 STANDARD_TEXT, STANDARD_LONGTEXT, false )
@@ -310,14 +310,13 @@ vlc_module_begin ()
     add_string( CFG_PREFIX "aspect-ratio", "4:3", ASPECT_TEXT,
               ASPECT_LONGTEXT, true )
         change_safe()
-    /*add_float( CFG_PREFIX "fps", 0, FPS_TEXT, FPS_LONGTEXT, true )*/
-    add_obsolete_float( CFG_PREFIX "fps" )
-        change_safe() /* since 2.1.0 */
+    add_string( CFG_PREFIX "fps", "60", FPS_TEXT, FPS_LONGTEXT, false )
+        change_safe()
     add_obsolete_bool( CFG_PREFIX "use-libv4l2" ) /* since 2.1.0 */
 
     set_section( N_( "Tuner" ), NULL )
-    add_loadfile( CFG_PREFIX "radio-dev", "/dev/radio0",
-                  RADIO_DEVICE_TEXT, RADIO_DEVICE_LONGTEXT, false )
+    add_loadfile(CFG_PREFIX "radio-dev", "/dev/radio0",
+                 RADIO_DEVICE_TEXT, RADIO_DEVICE_LONGTEXT)
         change_safe()
     add_obsolete_integer( CFG_PREFIX "tuner" ) /* since 2.1.0 */
     add_integer( CFG_PREFIX "tuner-frequency", -1, FREQUENCY_TEXT,
@@ -417,7 +416,7 @@ vlc_module_begin ()
     add_obsolete_integer( CFG_PREFIX "samplerate" )
 
     add_shortcut( "v4l", "v4l2" )
-    set_capability( "access_demux", 0 )
+    set_capability( "access", 2 )
     set_callbacks( DemuxOpen, DemuxClose )
 
     add_submodule ()
@@ -430,7 +429,7 @@ vlc_module_begin ()
     add_submodule ()
     add_shortcut ("radio" /*, "fm", "am" */)
     set_description (N_("Video4Linux radio tuner"))
-    set_capability ("access_demux", 0)
+    set_capability ("access", 1)
     set_callbacks (RadioOpen, RadioClose)
 
 vlc_module_end ()
@@ -470,14 +469,16 @@ int OpenDevice (vlc_object_t *obj, const char *path, uint32_t *restrict caps)
     int rawfd = vlc_open (path, O_RDWR);
     if (rawfd == -1)
     {
-        msg_Err (obj, "cannot open device '%s': %m", path);
+        msg_Err (obj, "cannot open device '%s': %s", path,
+                 vlc_strerror_c(errno));
         return -1;
     }
 
     int fd = v4l2_fd_open (rawfd, 0);
     if (fd == -1)
     {
-        msg_Warn (obj, "cannot initialize user-space library: %m");
+        msg_Warn (obj, "cannot initialize user-space library: %s",
+                  vlc_strerror_c(errno));
         /* fallback to direct kernel mode anyway */
         fd = rawfd;
     }
@@ -486,7 +487,8 @@ int OpenDevice (vlc_object_t *obj, const char *path, uint32_t *restrict caps)
     struct v4l2_capability cap;
     if (v4l2_ioctl (fd, VIDIOC_QUERYCAP, &cap) < 0)
     {
-        msg_Err (obj, "cannot get device capabilities: %m");
+        msg_Err (obj, "cannot get device capabilities: %s",
+                 vlc_strerror_c(errno));
         v4l2_close (fd);
         return -1;
     }

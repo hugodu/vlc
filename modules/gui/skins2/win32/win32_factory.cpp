@@ -74,7 +74,7 @@ LRESULT CALLBACK Win32Factory::Win32Proc( HWND hwnd, UINT uMsg,
             // If closing parent window
             if( (wParam & 0xFFF0) == SC_CLOSE )
             {
-                libvlc_Quit( p_intf->p_libvlc );
+                libvlc_Quit( p_intf->obj.libvlc );
                 return 0;
             }
             else if( (wParam & 0xFFF0) == SC_MINIMIZE )
@@ -133,7 +133,7 @@ BOOL CALLBACK Win32Factory::MonitorEnumProc( HMONITOR hMonitor, HDC hdcMonitor,
                                              LPRECT lprcMonitor, LPARAM dwData )
 {
     (void)hdcMonitor; (void)lprcMonitor;
-    list<HMONITOR>* pList = (list<HMONITOR>*)dwData;
+    std::list<HMONITOR>* pList = (std::list<HMONITOR>*)dwData;
     pList->push_back( hMonitor );
 
     return TRUE;
@@ -233,20 +233,20 @@ bool Win32Factory::init()
     OleInitialize( NULL );
 
     // Initialize the resource path
-    char *datadir = config_GetUserDir( VLC_DATA_DIR );
-    m_resourcePath.push_back( (string)datadir + "\\skins" );
+    char *datadir = config_GetUserDir( VLC_USERDATA_DIR );
+    m_resourcePath.push_back( (std::string)datadir + "\\skins" );
     free( datadir );
-    datadir = config_GetDataDir();
-    m_resourcePath.push_back( (string)datadir + "\\skins" );
-    m_resourcePath.push_back( (string)datadir + "\\skins2" );
-    m_resourcePath.push_back( (string)datadir + "\\share\\skins" );
-    m_resourcePath.push_back( (string)datadir + "\\share\\skins2" );
+    datadir = config_GetSysPath(VLC_PKG_DATA_DIR, NULL);
+    m_resourcePath.push_back( (std::string)datadir + "\\skins" );
+    m_resourcePath.push_back( (std::string)datadir + "\\skins2" );
+    m_resourcePath.push_back( (std::string)datadir + "\\share\\skins" );
+    m_resourcePath.push_back( (std::string)datadir + "\\share\\skins2" );
     free( datadir );
 
     // Enumerate all monitors available
     EnumDisplayMonitors( NULL, NULL, MonitorEnumProc, (LPARAM)&m_monitorList );
     int num = 0;
-    for( list<HMONITOR>::iterator it = m_monitorList.begin();
+    for( std::list<HMONITOR>::iterator it = m_monitorList.begin();
          it != m_monitorList.end(); ++it, num++ )
     {
         MONITORINFO mi;
@@ -413,7 +413,7 @@ void Win32Factory::getMonitorInfo( int numScreen, int* p_x, int* p_y,
                                    int* p_width, int* p_height ) const
 {
     HMONITOR hmon = NULL;
-    list<HMONITOR>::const_iterator it = m_monitorList.begin();
+    std::list<HMONITOR>::const_iterator it = m_monitorList.begin();
     for( int i = 0; it != m_monitorList.end(); ++it, i++ )
     {
         if( i == numScreen )
@@ -464,25 +464,26 @@ void Win32Factory::changeCursor( CursorType_t type ) const
     LPCTSTR id;
     switch( type )
     {
-    default:
     case kDefaultArrow: id = IDC_ARROW;    break;
     case kResizeNWSE:   id = IDC_SIZENWSE; break;
     case kResizeNS:     id = IDC_SIZENS;   break;
     case kResizeWE:     id = IDC_SIZEWE;   break;
     case kResizeNESW:   id = IDC_SIZENESW; break;
+    case kNoCursor:
+    default: id = 0;
     }
 
-    HCURSOR hCurs = LoadCursor( NULL, id );
+    HCURSOR hCurs = (type == kNoCursor) ? NULL : LoadCursor( NULL, id );
     SetCursor( hCurs );
 }
 
 
-void Win32Factory::rmDir( const string &rPath )
+void Win32Factory::rmDir( const std::string &rPath )
 {
     LPWSTR dir_temp = ToWide( rPath.c_str() );
     size_t len = wcslen( dir_temp );
 
-    LPWSTR dir = (wchar_t *)malloc( (len + 2) * sizeof (wchar_t) );
+    LPWSTR dir = (wchar_t *)vlc_alloc( len + 2, sizeof (wchar_t) );
     wcsncpy( dir, dir_temp, len + 2);
 
     SHFILEOPSTRUCTW file_op = {

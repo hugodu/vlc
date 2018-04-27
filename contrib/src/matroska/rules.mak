@@ -1,29 +1,29 @@
 # matroska
 
-MATROSKA_VERSION := 1.4.0
-MATROSKA_URL := http://dl.matroska.org/downloads/libmatroska/libmatroska-$(MATROSKA_VERSION).tar.bz2
-#MATROSKA_URL := $(CONTRIB_VIDEOLAN)/libmatroska-$(MATROSKA_VERSION).tar.bz2
+MATROSKA_VERSION := 1.4.9
+MATROSKA_URL := http://dl.matroska.org/downloads/libmatroska/libmatroska-$(MATROSKA_VERSION).tar.xz
 
 PKGS += matroska
+
+ifeq ($(call need_pkg,"libmatroska"),)
+PKGS_FOUND += matroska
+endif
+
 DEPS_matroska = ebml $(DEPS_ebml)
 
-$(TARBALLS)/libmatroska-$(MATROSKA_VERSION).tar.bz2:
-	$(call download,$(MATROSKA_URL))
+$(TARBALLS)/libmatroska-$(MATROSKA_VERSION).tar.xz:
+	$(call download_pkg,$(MATROSKA_URL),matroska)
 
-.sum-matroska: libmatroska-$(MATROSKA_VERSION).tar.bz2
+.sum-matroska: libmatroska-$(MATROSKA_VERSION).tar.xz
 
-libmatroska: libmatroska-$(MATROSKA_VERSION).tar.bz2 .sum-matroska
+libmatroska: libmatroska-$(MATROSKA_VERSION).tar.xz .sum-matroska
 	$(UNPACK)
-	$(APPLY) $(SRC)/matroska/matroska-pic.patch
-	$(APPLY) $(SRC)/matroska/no-ansi.patch
+	$(call pkg_static,"libmatroska.pc.in")
 	$(MOVE)
 
-.matroska: libmatroska
-ifdef HAVE_WIN32
-	cd $< && $(MAKE) -C make/mingw32 prefix="$(PREFIX)" $(HOSTVARS) SHARED=no EBML_DLL=no libmatroska.a
-else
-	cd $< && $(MAKE) -C make/linux prefix="$(PREFIX)" $(HOSTVARS) staticlib
-endif
-	cd $< && $(MAKE) -C make/linux install_staticlib install_headers prefix="$(PREFIX)" $(HOSTVARS)
-	$(RANLIB) "$(PREFIX)/lib/libmatroska.a"
+MATROSKA_EXTRA_FLAGS = CXXFLAGS="${CXXFLAGS} -fvisibility=hidden"
+
+.matroska: libmatroska toolchain.cmake
+	cd $< && $(HOSTVARS_PIC) $(CMAKE) -DBUILD_SHARED_LIBS=OFF
+	cd $< && $(MAKE) install
 	touch $@

@@ -46,7 +46,7 @@ static const int rate_values[] = { 192000, 176400,
     32000, 22050, 24000, 16000,
     11025, 8000, 4000
 };
-static const const char *rate_names[] = { N_("192000 Hz"), N_("176400 Hz"),
+static const char *const rate_names[] = { N_("192000 Hz"), N_("176400 Hz"),
     N_("96000 Hz"), N_("88200 Hz"), N_("48000 Hz"), N_("44100 Hz"),
     N_("32000 Hz"), N_("22050 Hz"), N_("24000 Hz"), N_("16000 Hz"),
     N_("11025 Hz"), N_("8000 Hz"), N_("4000 Hz")
@@ -55,7 +55,7 @@ static const const char *rate_names[] = { N_("192000 Hz"), N_("176400 Hz"),
 vlc_module_begin ()
     set_shortname (N_("ALSA"))
     set_description (N_("ALSA audio capture"))
-    set_capability ("access_demux", 0)
+    set_capability ("access", 0)
     set_category (CAT_INPUT)
     set_subcategory (SUBCAT_INPUT_ACCESS)
     set_help (HELP_TEXT)
@@ -144,7 +144,7 @@ static void Poll (snd_pcm_t *pcm, int canc)
     do
     {
         vlc_restorecancel (canc);
-        poll (ufd, n, -1);
+        while (poll (ufd, n, -1) == -1);
         canc = vlc_savecancel ();
         snd_pcm_poll_descriptors_revents (pcm, ufd, n, &revents);
     }
@@ -185,6 +185,7 @@ static void *Thread (void *data)
         pts = mdate ();
         if (frames < 0)
         {
+            block_Release (block);
             if (frames == -EAGAIN)
                 continue;
 
@@ -193,7 +194,23 @@ static void *Thread (void *data)
             {
                 msg_Warn (demux, "cannot read samples: %s",
                           snd_strerror (frames));
-                continue;
+                snd_pcm_state_t state = snd_pcm_state (pcm);
+                switch (state)
+                {
+                case SND_PCM_STATE_PREPARED:
+                    val = snd_pcm_start (pcm);
+                    if (val < 0)
+                    {
+                        msg_Err (demux, "cannot prepare device: %s",
+                                 snd_strerror (val));
+                        return NULL;
+                    }
+                    continue;
+                case SND_PCM_STATE_RUNNING:
+                    continue;
+                default:
+                    break;
+                }
             }
             msg_Err (demux, "cannot recover record stream: %s",
                      snd_strerror (val));
@@ -212,7 +229,7 @@ static void *Thread (void *data)
         block->i_pts = pts;
         block->i_length = (CLOCK_FREQ * frames) / sys->rate;
 
-        es_out_Control (demux->out, ES_OUT_SET_PCR, block->i_pts);
+        es_out_SetPCR(demux->out, block->i_pts);
         es_out_Send (demux->out, sys->es, block);
     }
     return NULL;
@@ -324,8 +341,11 @@ static uint16_t channel_maps[] = {
 static int Open (vlc_object_t *obj)
 {
     demux_t *demux = (demux_t *)obj;
-    demux_sys_t *sys = malloc (sizeof (*sys));
 
+    if (demux->out == NULL)
+        return VLC_EGENERIC;
+
+    demux_sys_t *sys = vlc_obj_malloc(obj, sizeof (*sys));
     if (unlikely(sys == NULL))
         return VLC_ENOMEM;
 
@@ -344,7 +364,6 @@ static int Open (vlc_object_t *obj)
     {
         msg_Err (demux, "cannot open ALSA device \"%s\": %s", device,
                  snd_strerror (val));
-        free (sys);
         return VLC_EGENERIC;
     }
     sys->pcm = pcm;
@@ -418,7 +437,6 @@ static int Open (vlc_object_t *obj)
     assert (param > 0);
     assert (param < (sizeof (channel_maps) / sizeof (channel_maps[0])));
     fmt.audio.i_channels = param;
-    fmt.audio.i_original_channels =
     fmt.audio.i_physical_channels = channel_maps[param - 1];
 
     param = var_InheritInteger (demux, "alsa-samplerate");
@@ -480,6 +498,7 @@ static int Open (vlc_object_t *obj)
     /* Kick recording */
     aout_FormatPrepare (&fmt.audio);
     sys->es = es_out_Add (demux->out, &fmt);
+    demux->p_sys = sys;
 
     if (vlc_clone (&sys->thread, Thread, demux, VLC_THREAD_PRIORITY_INPUT))
     {
@@ -487,13 +506,11 @@ static int Open (vlc_object_t *obj)
         goto error;
     }
 
-    demux->p_sys = sys;
     demux->pf_demux = NULL;
     demux->pf_control = Control;
     return VLC_SUCCESS;
 error:
     snd_pcm_close (pcm);
-    free (sys);
     return VLC_EGENERIC;
 }
 
@@ -506,5 +523,4 @@ static void Close (vlc_object_t *obj)
     vlc_join (sys->thread, NULL);
 
     snd_pcm_close (sys->pcm);
-    free (sys);
 }

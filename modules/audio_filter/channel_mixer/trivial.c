@@ -1,8 +1,7 @@
 /*****************************************************************************
  * trivial.c : trivial channel mixer plug-in (drops unwanted channels)
  *****************************************************************************
- * Copyright (C) 2002, 2006 VLC authors and VideoLAN
- * $Id$
+ * Copyright (C) 2002, 2006, 2014 VLC authors and VideoLAN
  *
  * Authors: Christophe Massiot <massiot@via.ecp.fr>
  *
@@ -29,156 +28,291 @@
 # include "config.h"
 #endif
 
+#include <assert.h>
+
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_aout.h>
 #include <vlc_filter.h>
 
-/*****************************************************************************
- * Local prototypes
- *****************************************************************************/
-static int  Create    ( vlc_object_t * );
+static int Create( vlc_object_t * );
+static void Destroy( vlc_object_t * );
 
-static block_t *DoWork( filter_t *, block_t * );
-
-/*****************************************************************************
- * Module descriptor
- *****************************************************************************/
 vlc_module_begin ()
     set_description( N_("Audio filter for trivial channel mixing") )
     set_capability( "audio converter", 1 )
     set_category( CAT_AUDIO )
     set_subcategory( SUBCAT_AUDIO_MISC )
-    set_callbacks( Create, NULL )
+    set_callbacks( Create, Destroy )
 vlc_module_end ()
 
-/*****************************************************************************
- * Create: allocate trivial channel mixer
- *****************************************************************************/
-static int Create( vlc_object_t *p_this )
+struct filter_sys_t
 {
-    filter_t * p_filter = (filter_t *)p_this;
+    int channel_map[AOUT_CHAN_MAX];
+};
 
-    if ( (p_filter->fmt_in.audio.i_physical_channels
-           == p_filter->fmt_out.audio.i_physical_channels
-           && p_filter->fmt_in.audio.i_original_channels
-               == p_filter->fmt_out.audio.i_original_channels)
-          || p_filter->fmt_in.audio.i_format != p_filter->fmt_out.audio.i_format
-          || p_filter->fmt_in.audio.i_rate != p_filter->fmt_out.audio.i_rate
-          || p_filter->fmt_in.audio.i_format != VLC_CODEC_FL32 )
-    {
-        return VLC_EGENERIC;
-    }
-
-    p_filter->pf_audio_filter = DoWork;
-    return VLC_SUCCESS;
-}
-
-/*****************************************************************************
- * SparseCopy: trivially downmix or upmix a buffer
- *****************************************************************************/
-static void SparseCopy( float * p_dest, const float * p_src, size_t i_len,
-                        int i_output_stride, int i_input_stride )
+/**
+ * Trivially upmixes
+ */
+static block_t *Upmix( filter_t *p_filter, block_t *p_in_buf )
 {
-    int i;
-    for ( i = i_len; i--; )
-    {
-        int j;
-        for ( j = 0; j < i_output_stride; j++ )
-        {
-            p_dest[j] = p_src[j % i_input_stride];
-        }
-        p_src += i_input_stride;
-        p_dest += i_output_stride;
-    }
-}
+    unsigned i_input_nb = aout_FormatNbChannels( &p_filter->fmt_in.audio );
+    unsigned i_output_nb = aout_FormatNbChannels( &p_filter->fmt_out.audio );
 
-/*****************************************************************************
- * DoWork: convert a buffer
- *****************************************************************************/
-static block_t *DoWork( filter_t * p_filter, block_t * p_in_buf )
-{
-    int i_input_nb = aout_FormatNbChannels( &p_filter->fmt_in.audio );
-    int i_output_nb = aout_FormatNbChannels( &p_filter->fmt_out.audio );
+    assert( i_input_nb < i_output_nb );
 
-    block_t *p_out_buf;
-    if( i_input_nb >= i_output_nb )
+    block_t *p_out_buf = block_Alloc(
+                              p_in_buf->i_buffer * i_output_nb / i_input_nb );
+    if( unlikely(p_out_buf == NULL) )
     {
-        p_out_buf = p_in_buf; /* mix in place */
-        p_out_buf->i_buffer = p_in_buf->i_buffer / i_input_nb * i_output_nb;
-    }
-    else
-    {
-        p_out_buf = block_Alloc(
-                              p_in_buf->i_buffer / i_input_nb * i_output_nb );
-        if( !p_out_buf )
-            goto out;
-        p_out_buf->i_nb_samples = p_in_buf->i_nb_samples;
-        p_out_buf->i_dts        = p_in_buf->i_dts;
-        p_out_buf->i_pts        = p_in_buf->i_pts;
-        p_out_buf->i_length     = p_in_buf->i_length;
-    }
-
-    float * p_dest = (float *)p_out_buf->p_buffer;
-    const float * p_src = (float *)p_in_buf->p_buffer;
-
-    if ( (p_filter->fmt_out.audio.i_original_channels & AOUT_CHAN_PHYSMASK)
-                != (p_filter->fmt_in.audio.i_original_channels & AOUT_CHAN_PHYSMASK)
-           && (p_filter->fmt_in.audio.i_original_channels & AOUT_CHAN_PHYSMASK)
-                == (AOUT_CHAN_LEFT | AOUT_CHAN_RIGHT) )
-    {
-        int i;
-        /* This is a bit special. */
-        if ( !(p_filter->fmt_out.audio.i_original_channels & AOUT_CHAN_LEFT) )
-        {
-            p_src++;
-        }
-        if ( p_filter->fmt_out.audio.i_physical_channels == AOUT_CHAN_CENTER )
-        {
-            /* Mono mode */
-            for ( i = p_in_buf->i_nb_samples; i--; )
-            {
-                *p_dest = *p_src;
-                p_dest++;
-                p_src += 2;
-            }
-        }
-        else
-        {
-            /* Fake-stereo mode */
-            for ( i = p_in_buf->i_nb_samples; i--; )
-            {
-                *p_dest = *p_src;
-                p_dest++;
-                *p_dest = *p_src;
-                p_dest++;
-                p_src += 2;
-            }
-        }
-    }
-    else if ( p_filter->fmt_out.audio.i_original_channels
-                                    & AOUT_CHAN_REVERSESTEREO )
-    {
-        /* Reverse-stereo mode */
-        int i;
-        for ( i = p_in_buf->i_nb_samples; i--; )
-        {
-            float i_tmp = p_src[0];
-            p_dest[0] = p_src[1];
-            p_dest[1] = i_tmp;
-
-            p_dest += 2;
-            p_src += 2;
-        }
-    }
-    else
-    {
-        SparseCopy( p_dest, p_src, p_in_buf->i_nb_samples, i_output_nb,
-                    i_input_nb );
-    }
-out:
-    if( p_in_buf != p_out_buf )
         block_Release( p_in_buf );
+        return NULL;
+    }
+
+    p_out_buf->i_nb_samples = p_in_buf->i_nb_samples;
+    p_out_buf->i_dts        = p_in_buf->i_dts;
+    p_out_buf->i_pts        = p_in_buf->i_pts;
+    p_out_buf->i_length     = p_in_buf->i_length;
+
+    filter_sys_t *p_sys = p_filter->p_sys;
+
+    float *p_dest = (float *)p_out_buf->p_buffer;
+    const float *p_src = (float *)p_in_buf->p_buffer;
+    const int *channel_map = p_sys->channel_map;
+
+    for( size_t i = 0; i < p_in_buf->i_nb_samples; i++ )
+    {
+        for( unsigned j = 0; j < i_output_nb; j++ )
+            p_dest[j] = channel_map[j] == -1 ? 0.f : p_src[channel_map[j]];
+
+        p_src += i_input_nb;
+        p_dest += i_output_nb;
+    }
+
+    block_Release( p_in_buf );
     return p_out_buf;
 }
 
+/**
+ * Trivially downmixes (i.e. drop extra channels)
+ */
+static block_t *Downmix( filter_t *p_filter, block_t *p_buf )
+{
+    unsigned i_input_nb = aout_FormatNbChannels( &p_filter->fmt_in.audio );
+    unsigned i_output_nb = aout_FormatNbChannels( &p_filter->fmt_out.audio );
+
+    assert( i_input_nb >= i_output_nb );
+
+    filter_sys_t *p_sys = p_filter->p_sys;
+
+    float *p_dest = (float *)p_buf->p_buffer;
+    const float *p_src = p_dest;
+    const int *channel_map = p_sys->channel_map;
+    /* Use an extra buffer to avoid overlapping */
+    float buffer[i_output_nb];
+
+    for( size_t i = 0; i < p_buf->i_nb_samples; i++ )
+    {
+        for( unsigned j = 0; j < i_output_nb; j++ )
+            buffer[j] = channel_map[j] == -1 ? 0.f : p_src[channel_map[j]];
+        memcpy( p_dest, buffer, i_output_nb * sizeof(float) );
+
+        p_src += i_input_nb;
+        p_dest += i_output_nb;
+    }
+    p_buf->i_buffer = p_buf->i_buffer * i_output_nb / i_input_nb;
+
+    return p_buf;
+}
+
+static block_t *Equals( filter_t *p_filter, block_t *p_buf )
+{
+    (void) p_filter;
+    return p_buf;
+}
+
+static block_t *Extract( filter_t *p_filter, block_t *p_in_buf )
+{
+    size_t i_out_channels = aout_FormatNbChannels( &p_filter->fmt_out.audio );
+    size_t i_out_size = p_in_buf->i_nb_samples
+                      * p_filter->fmt_out.audio.i_bitspersample
+                      * i_out_channels / 8;
+
+    block_t *p_out_buf = block_Alloc( i_out_size );
+    if( unlikely(p_out_buf == NULL) )
+    {
+        block_Release( p_in_buf );
+        return NULL;
+    }
+
+    p_out_buf->i_nb_samples = p_in_buf->i_nb_samples;
+    p_out_buf->i_dts        = p_in_buf->i_dts;
+    p_out_buf->i_pts        = p_in_buf->i_pts;
+    p_out_buf->i_length     = p_in_buf->i_length;
+
+    static const int pi_selections[] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8,
+    };
+    static_assert(sizeof(pi_selections)/sizeof(int) == AOUT_CHAN_MAX,
+                  "channel max size mismatch!");
+
+    aout_ChannelExtract( p_out_buf->p_buffer, i_out_channels,
+                         p_in_buf->p_buffer, p_filter->fmt_in.audio.i_channels,
+                         p_in_buf->i_nb_samples, pi_selections,
+                         p_filter->fmt_out.audio.i_bitspersample );
+
+    return p_out_buf;
+}
+
+/**
+ * Probes the trivial channel mixer
+ */
+static int Create( vlc_object_t *p_this )
+{
+    filter_t *p_filter = (filter_t *)p_this;
+    const audio_format_t *infmt = &p_filter->fmt_in.audio;
+    const audio_format_t *outfmt = &p_filter->fmt_out.audio;
+
+    if( infmt->i_physical_channels == 0 )
+    {
+        assert( infmt->i_channels > 0 );
+        if( outfmt->i_physical_channels == 0 )
+            return VLC_EGENERIC;
+        if( aout_FormatNbChannels( outfmt ) == infmt->i_channels )
+        {
+            p_filter->pf_audio_filter = Equals;
+            return VLC_SUCCESS;
+        }
+        else
+        {
+            if( infmt->i_channels > AOUT_CHAN_MAX )
+                msg_Info(p_filter, "%d channels will be dropped.",
+                         infmt->i_channels - AOUT_CHAN_MAX);
+            p_filter->pf_audio_filter = Extract;
+            return VLC_SUCCESS;
+        }
+    }
+
+    if( infmt->i_format != outfmt->i_format
+     || infmt->i_rate != outfmt->i_rate
+     || infmt->i_format != VLC_CODEC_FL32 )
+        return VLC_EGENERIC;
+
+    /* trivial is the lowest priority converter: if chan_mode are different
+     * here, this filter will still need to convert channels (and ignore
+     * chan_mode). */
+    if( infmt->i_physical_channels == outfmt->i_physical_channels
+     && infmt->i_chan_mode == outfmt->i_chan_mode )
+        return VLC_EGENERIC;
+
+    p_filter->p_sys = NULL;
+
+    if ( aout_FormatNbChannels( outfmt ) == 1
+      && aout_FormatNbChannels( infmt ) == 1 )
+    {
+        p_filter->pf_audio_filter = Equals;
+        return VLC_SUCCESS;
+    }
+
+    /* Setup channel order */
+    uint16_t i_in_physical_channels = infmt->i_physical_channels;
+    uint16_t i_out_physical_channels = outfmt->i_physical_channels;
+
+    /* Fill src_chans: contains a sorted index of all presents in channels */
+    int i_src_idx = 0;
+    int src_chans[AOUT_CHAN_MAX];
+    for( unsigned i = 0; i < AOUT_CHAN_MAX; ++i )
+        src_chans[i] = pi_vlc_chan_order_wg4[i] & i_in_physical_channels ?
+                       i_src_idx++ : -1;
+
+    unsigned i_dst_idx = 0;
+    int channel_map[AOUT_CHAN_MAX];
+    for( unsigned i = 0; i < AOUT_CHAN_MAX; ++i )
+    {
+        const uint32_t i_chan = pi_vlc_chan_order_wg4[i];
+        if( !( i_chan & i_out_physical_channels ) )
+            continue; /* Output channel not present */
+
+        if( aout_FormatNbChannels( infmt ) == 1 )
+        {
+            /* Input is mono, copy the mono channel to Left,Right */
+            if( i_chan & AOUT_CHANS_FRONT )
+                channel_map[i_dst_idx] = 0;
+            else
+                channel_map[i_dst_idx] = -1;
+        }
+        else if( src_chans[i] != -1 )
+        {
+            /* Input and output have the same channel */
+            assert( i_chan & i_in_physical_channels );
+            channel_map[i_dst_idx] = src_chans[i];
+        }
+        else
+        {
+            if( ( i_chan & AOUT_CHANS_MIDDLE )
+             && !( i_out_physical_channels & AOUT_CHANS_REAR ) )
+            {
+                /* Use Rear chans as Middle chans if Rear chans are not used */
+                assert( i + 2 < AOUT_CHAN_MAX );
+                assert( pi_vlc_chan_order_wg4[i + 2] & AOUT_CHANS_REAR );
+                channel_map[i_dst_idx] = src_chans[i + 2];
+            }
+            else if( ( i_chan & AOUT_CHANS_REAR )
+                  && !( i_out_physical_channels & AOUT_CHANS_MIDDLE ) )
+            {
+                /* Use Middle chans as Rear chans if Middle chans are not used */
+                assert( (int) i - 2 >= 0 );
+                assert( pi_vlc_chan_order_wg4[i - 2] & AOUT_CHANS_MIDDLE );
+                channel_map[i_dst_idx] = src_chans[i - 2];
+            }
+            else
+                channel_map[i_dst_idx] = -1;
+        }
+        i_dst_idx++;
+    }
+#ifndef NDEBUG
+    for( unsigned i = 0; i < aout_FormatNbChannels( outfmt ); ++i )
+    {
+        assert( channel_map[i] == -1
+             || (unsigned) channel_map[i] < aout_FormatNbChannels( infmt ) );
+    }
+#endif
+
+    if( aout_FormatNbChannels( outfmt ) == aout_FormatNbChannels( infmt ) )
+    {
+        /* Channel layouts can be different but the channel order can be the
+         * same. This is the case for AOUT_CHANS_5_1 <-> AOUT_CHANS_5_1_MIDDLE
+         * for example. */
+        bool b_equals = true;
+        for( unsigned i = 0; i < aout_FormatNbChannels( outfmt ); ++i )
+            if( channel_map[i] == -1 || (unsigned) channel_map[i] != i )
+            {
+                b_equals = false;
+                break;
+            }
+        if( b_equals )
+        {
+            p_filter->pf_audio_filter = Equals;
+            return VLC_SUCCESS;
+        }
+    }
+
+    filter_sys_t *p_sys = malloc( sizeof(*p_sys) );
+    if( !p_sys )
+        return VLC_ENOMEM;
+    p_filter->p_sys = p_sys;
+    memcpy( p_sys->channel_map, channel_map, sizeof(channel_map) );
+
+    if( aout_FormatNbChannels( outfmt ) > aout_FormatNbChannels( infmt ) )
+        p_filter->pf_audio_filter = Upmix;
+    else
+        p_filter->pf_audio_filter = Downmix;
+
+    return VLC_SUCCESS;
+}
+
+static void Destroy( vlc_object_t *p_this )
+{
+    filter_t *p_filter = (filter_t *)p_this;
+    free( p_filter->p_sys );
+}

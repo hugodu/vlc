@@ -29,7 +29,13 @@
 #include <vlc_network.h>
 
 #include <CoreFoundation/CoreFoundation.h>
+
+#import <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <CFNetwork/CFProxySupport.h>
+#else
 #include <CoreServices/CoreServices.h>
+#endif
 
 /**
  * Determines the network proxy server to use (if any).
@@ -56,11 +62,8 @@ char *vlc_getProxyUrl(const char *url)
             char host_buffer[4096];
             memset(host_buffer, 0, sizeof(host_buffer));
             if (CFStringGetCString(proxyCFstr, host_buffer, sizeof(host_buffer)
-                                   - 1, kCFStringEncodingUTF8)) {
-                char buffer[4096];
-                sprintf(buffer, "%s:%d", host_buffer, port);
-                proxy_url = strdup(buffer);
-            }
+                                   - 1, kCFStringEncodingUTF8))
+                asprintf(&proxy_url, "http://%s:%d", host_buffer, port);
         }
 
         CFRelease(dicRef);

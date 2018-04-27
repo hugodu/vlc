@@ -8,6 +8,7 @@
 //  GC-enabled code revised by Stefan Vogt http://byteproject.net
 //
 
+#import "CompatibilityFixes.h"
 #import "PXSourceList.h"
 #import "SideBarItem.h"
 
@@ -48,7 +49,6 @@ NSString * const PXSLDeleteKeyPressedOnRowsNotification = @"PXSourceListDeleteKe
 #pragma mark -
 @implementation PXSourceList
 
-@synthesize iconSize = _iconSize;
 @dynamic dataSource;
 @dynamic delegate;
 
@@ -58,9 +58,9 @@ NSString * const PXSLDeleteKeyPressedOnRowsNotification = @"PXSourceListDeleteKe
 {
     if(self=[super initWithCoder:decoder])
     {
-        [self setDelegate:(id<PXSourceListDelegate>)[super delegate]];
+        [self setDelegate:(id<PXSourceListDelegate, NSOutlineViewDelegate>)[super delegate]];
         [super setDelegate:self];
-        [self setDataSource:(id<PXSourceListDataSource>)[super dataSource]];
+        [self setDataSource:(id<PXSourceListDataSource, NSOutlineViewDataSource>)[super dataSource]];
         [super setDataSource:self];
 
         _iconSize = NSMakeSize(16,16);
@@ -72,17 +72,7 @@ NSString * const PXSLDeleteKeyPressedOnRowsNotification = @"PXSourceListDeleteKe
 - (void)dealloc
 {
     //Unregister the delegate from receiving notifications
-    [[NSNotificationCenter defaultCenter] removeObserver:_secondaryDelegate name:nil object:self];
-
-    [super dealloc];
-}
-
-- (void)finalize
-{
-    //Unregister the delegate from receiving notifications
-    [[NSNotificationCenter defaultCenter] removeObserver:_secondaryDelegate name:nil object:self];
-
-    [super finalize];
+    [[NSNotificationCenter defaultCenter] removeObserver:_secondaryDelegate];
 }
 
 #pragma mark -
@@ -354,8 +344,6 @@ NSString * const PXSLDeleteKeyPressedOnRowsNotification = @"PXSourceListDeleteKe
         width = MIN_BADGE_WIDTH;
     }
 
-    [badgeAttrString release];
-
     return NSMakeSize(width, BADGE_HEIGHT);
 }
 
@@ -390,21 +378,11 @@ NSString * const PXSLDeleteKeyPressedOnRowsNotification = @"PXSourceListDeleteKe
                         iconRect = NSMakeRect(NSMidX(iconRect)-(actualIconSize.width/2.0f), NSMidY(iconRect)-(actualIconSize.height/2.0f), actualIconSize.width, actualIconSize.height);
                     }
 
-                    //Use 10.6 NSImage drawing if we can
-                    if(NSAppKitVersionNumber >= 1115.2) { // Lion
-                        [icon drawInRect:iconRect
-                                fromRect:NSZeroRect
-                               operation:NSCompositeSourceOver
-                                fraction:1
-                          respectFlipped:YES hints:nil];
-                    }
-                    else {
-                        [icon setFlipped:[self isFlipped]];
-                        [icon drawInRect:iconRect
-                                fromRect:NSZeroRect
-                               operation:NSCompositeSourceOver
-                                fraction:1];
-                    }
+                    [icon drawInRect:iconRect
+                            fromRect:NSZeroRect
+                           operation:NSCompositeSourceOver
+                            fraction:1
+                      respectFlipped:YES hints:nil];
                 }
             }
         }
@@ -498,8 +476,6 @@ NSString * const PXSLDeleteKeyPressedOnRowsNotification = @"PXSourceListDeleteKe
     NSPoint badgeTextPoint = NSMakePoint(NSMidX(badgeFrame)-(stringSize.width/2.0), //Center in the badge frame
                                          NSMidY(badgeFrame)-(stringSize.height/2.0)); //Center in the badge frame
     [badgeAttrString drawAtPoint:badgeTextPoint];
-    [attributes release];
-    [badgeAttrString release];
 }
 
 #pragma mark -
@@ -725,7 +701,7 @@ NSString * const PXSLDeleteKeyPressedOnRowsNotification = @"PXSourceListDeleteKe
     NSInteger row = [self rowForItem:item];
 
     //Return the default table column
-    return [[[self tableColumns] objectAtIndex:0] dataCellForRow:row];
+    return [[[self tableColumns] firstObject] dataCellForRow:row];
 }
 
 - (void)outlineView:(NSOutlineView *)outlineView willDisplayCell:(id)cell forTableColumn:(NSTableColumn *)tableColumn item:(id)item

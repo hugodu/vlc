@@ -1,7 +1,7 @@
 /*****************************************************************************
  * rtsp.c: RTSP support for RTP stream output module
  *****************************************************************************
- * Copyright (C) 2003-2004, 2010 the VideoLAN team
+ * Copyright (C) 2003-2004, 2010 VLC authors and VideoLAN
  * Copyright © 2007 Rémi Denis-Courmont
  *
  * $Id$
@@ -9,19 +9,19 @@
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Pierre Ynard
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 
 /*****************************************************************************
@@ -87,22 +87,13 @@ static void RtspTimeOut( void *data );
 rtsp_stream_t *RtspSetup( vlc_object_t *owner, vod_media_t *media,
                           const char *path )
 {
-    rtsp_stream_t *rtsp = malloc( sizeof( *rtsp ) );
+    rtsp_stream_t *rtsp = calloc( 1, sizeof( *rtsp ) );
 
-    if( rtsp == NULL )
-    {
-        free( rtsp );
+    if( unlikely(rtsp == NULL) )
         return NULL;
-    }
 
     rtsp->owner = owner;
     rtsp->vod_media = media;
-    rtsp->sessionc = 0;
-    rtsp->sessionv = NULL;
-    rtsp->host = NULL;
-    rtsp->url = NULL;
-    rtsp->psz_path = NULL;
-    rtsp->track_id = 0;
     vlc_mutex_init( &rtsp->lock );
 
     rtsp->timeout = var_InheritInteger(owner, "rtsp-timeout");
@@ -170,7 +161,7 @@ void RtspUnsetup( rtsp_stream_t *rtsp )
 struct rtsp_stream_id_t
 {
     rtsp_stream_t    *stream;
-    sout_stream_id_t *sout_id;
+    sout_stream_id_sys_t *sout_id;
     httpd_url_t      *url;
     unsigned          track_id;
     uint32_t          ssrc;
@@ -198,7 +189,7 @@ struct rtsp_session_t
 struct rtsp_strack_t
 {
     rtsp_stream_id_t  *id;
-    sout_stream_id_t  *sout_id;
+    sout_stream_id_sys_t  *sout_id;
     int          setup_fd;  /* socket created by the SETUP request */
     int          rtp_fd;    /* socket used by the RTP output, when playing */
     uint32_t     ssrc;
@@ -221,7 +212,7 @@ char *RtspAppendTrackPath( rtsp_stream_id_t *id, const char *base )
 }
 
 
-rtsp_stream_id_t *RtspAddId( rtsp_stream_t *rtsp, sout_stream_id_t *sid,
+rtsp_stream_id_t *RtspAddId( rtsp_stream_t *rtsp, sout_stream_id_sys_t *sid,
                              uint32_t ssrc, unsigned clock_rate,
                              int mcast_fd)
 {
@@ -296,7 +287,7 @@ void RtspDelId( rtsp_stream_t *rtsp, rtsp_stream_id_t *id )
             {
                 rtsp_strack_t *tr = ses->trackv + j;
                 RtspTrackClose( tr );
-                REMOVE_ELEM( ses->trackv, ses->trackc, j );
+                TAB_ERASE(ses->trackc, ses->trackv, j);
             }
         }
     }
@@ -436,7 +427,7 @@ static int dup_socket(int oldfd)
 /* Attach a starting VoD RTP id to its RTSP track, and let it
  * initialize with the parameters of the SETUP request */
 int RtspTrackAttach( rtsp_stream_t *rtsp, const char *name,
-                     rtsp_stream_id_t *id, sout_stream_id_t *sout_id,
+                     rtsp_stream_id_t *id, sout_stream_id_sys_t *sout_id,
                      uint32_t *ssrc, uint16_t *seq_init )
 {
     int val = VLC_EGENERIC;
@@ -472,7 +463,7 @@ int RtspTrackAttach( rtsp_stream_t *rtsp, const char *name,
         vlc_rand_bytes (&track.seq_init, sizeof (track.seq_init));
         vlc_rand_bytes (&track.ssrc, sizeof (track.ssrc));
 
-        INSERT_ELEM(session->trackv, session->trackc, session->trackc, track);
+        TAB_APPEND(session->trackc, session->trackv, track);
         tr = session->trackv + session->trackc - 1;
     }
 
@@ -498,7 +489,7 @@ out:
 
 /* Remove references to the RTP id when it is stopped */
 void RtspTrackDetach( rtsp_stream_t *rtsp, const char *name,
-                      sout_stream_id_t *sout_id )
+                      sout_stream_id_sys_t *sout_id )
 {
     rtsp_session_t *session;
 
@@ -518,7 +509,7 @@ void RtspTrackDetach( rtsp_stream_t *rtsp, const char *name,
                 /* No (more) SETUP information: better get rid of the
                  * track so that we can have new random ssrc and
                  * seq_init next time. */
-                REMOVE_ELEM( session->trackv, session->trackc, i );
+                TAB_ERASE(session->trackc, session->trackv, i);
                 break;
             }
             /* We keep the SETUP information of the track, but stop it */
@@ -888,8 +879,7 @@ static int RtspHandler( rtsp_stream_t *rtsp, rtsp_stream_id_t *id,
                         else
                             ssrc = id->ssrc;
 
-                        INSERT_ELEM( ses->trackv, ses->trackc, ses->trackc,
-                                     track );
+                        TAB_APPEND(ses->trackc, ses->trackv, track);
                     }
                     else if (tr->setup_fd == -1)
                     {
@@ -989,7 +979,7 @@ static int RtspHandler( rtsp_stream_t *rtsp, rtsp_stream_id_t *id,
                 size_t infolen = 0;
                 RtspClientAlive(ses);
 
-                sout_stream_id_t *sout_id = NULL;
+                sout_stream_id_sys_t *sout_id = NULL;
                 if (vod)
                 {
                     /* We don't keep a reference to the sout_stream_t,
@@ -1077,8 +1067,7 @@ static int RtspHandler( rtsp_stream_t *rtsp, rtsp_stream_id_t *id,
             {
                 answer->i_status = 405;
                 httpd_MsgAdd( answer, "Allow",
-                              "%s, TEARDOWN, PLAY, GET_PARAMETER",
-                              ( id != NULL ) ? "SETUP" : "DESCRIBE" );
+                              "DESCRIBE, TEARDOWN, PLAY, GET_PARAMETER" );
                 break;
             }
 
@@ -1172,7 +1161,7 @@ static int RtspHandler( rtsp_stream_t *rtsp, rtsp_stream_id_t *id,
                             /* Keep VoD tracks whose instance is still
                              * running */
                             if (!(vod && ses->trackv[i].sout_id != NULL))
-                                REMOVE_ELEM( ses->trackv, ses->trackc, i );
+                                TAB_ERASE(ses->trackc, ses->trackv, i);
                         }
                     }
                     RtspClientAlive(ses);

@@ -30,11 +30,12 @@
 #endif
 
 #include <assert.h>
+#include <stdatomic.h>
 
 #include <vlc_common.h>
 #include <vlc_plugin.h>
-#include <vlc_atomic.h>
 #include <vlc_filter.h>
+#include <vlc_picture.h>
 #include "filter_picture.h"
 
 /*****************************************************************************
@@ -61,14 +62,14 @@ static const char *const ppsz_filter_options[] = {
  * Module descriptor
  *****************************************************************************/
 #define ORIENTATION_TEXT N_("Mirror orientation")
-#define ORIENTATION_LONGTEXT N_("Defines orientation of the mirror splitting. \
-    Can be vertical or horizontal" )
+#define ORIENTATION_LONGTEXT N_("Defines orientation of the mirror splitting. " \
+    "Can be vertical or horizontal." )
 static const int pi_orientation_values[] = { 0, 1 };
 static const char *const ppsz_orientation_descriptions[] = {
   N_("Vertical"), N_("Horizontal") };
 
 #define DIRECTION_TEXT N_("Direction")
-#define DIRECTION_LONGTEXT N_("Direction of the mirroring" )
+#define DIRECTION_LONGTEXT N_("Direction of the mirroring." )
 static const int pi_direction_values[] = { 0, 1 };
 static const char *const ppsz_direction_descriptions[] = {
   N_("Left to right/Top to bottom"), N_("Right to left/Bottom to top") };
@@ -81,7 +82,7 @@ vlc_module_begin ()
     set_help( N_("Splits video in two same parts, like in a mirror") )
     set_category( CAT_VIDEO )
     set_subcategory( SUBCAT_VIDEO_VFILTER )
-    set_capability( "video filter2", 0 )
+    set_capability( "video filter", 0 )
     add_integer( CFG_PREFIX "split", 0, ORIENTATION_TEXT,
                 ORIENTATION_LONGTEXT, false )
         change_integer_list( pi_orientation_values,
@@ -186,7 +187,6 @@ static picture_t *Filter( filter_t *p_filter, picture_t *p_pic )
 {
     picture_t *p_outpic;
     bool b_vertical_split, b_left_to_right;
-    int i_index;
 
     if( !p_pic ) return NULL;
 
@@ -202,7 +202,7 @@ static picture_t *Filter( filter_t *p_filter, picture_t *p_pic )
         return NULL;
     }
 
-    for( i_index = 0 ; i_index < p_pic->i_planes ; i_index++ )
+    for( int i_index = 0 ; i_index < p_pic->i_planes ; i_index++ )
     {
         if ( b_vertical_split )
             VerticalMirror( p_pic, p_outpic, i_index, b_left_to_right );
@@ -233,9 +233,6 @@ static void VerticalMirror( picture_t *p_pic, picture_t *p_outpic, int i_plane,
                                  true );
             break;
         case VLC_CODEC_UYVY:
-        case VLC_CODEC_CYUV:
-            YUV422VerticalMirror( p_pic, p_outpic, i_plane, b_left_to_right,
-                                 false );
             break;
         case VLC_CODEC_RGB24:
             RV24VerticalMirror( p_pic, p_outpic, i_plane, b_left_to_right );
@@ -244,7 +241,7 @@ static void VerticalMirror( picture_t *p_pic, picture_t *p_outpic, int i_plane,
             RV32VerticalMirror( p_pic, p_outpic, i_plane, b_left_to_right );
             break;
         default:
-            assert( false );
+            vlc_assert_unreachable();
     }
 }
 

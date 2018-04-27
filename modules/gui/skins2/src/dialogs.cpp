@@ -22,6 +22,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 
+#include <sstream>
 #include "dialogs.hpp"
 #include "../commands/async_queue.hpp"
 #include "../commands/cmd_change_skin.hpp"
@@ -30,6 +31,7 @@
 #include "../commands/cmd_playtree.hpp"
 #include <vlc_playlist.h>
 #include <vlc_modules.h>
+#include <vlc_url.h>
 
 /// Callback called when a new skin is chosen
 void Dialogs::showChangeSkinCB( intf_dialog_args_t *pArg )
@@ -40,13 +42,18 @@ void Dialogs::showChangeSkinCB( intf_dialog_args_t *pArg )
     {
         if( pArg->psz_results[0] )
         {
-            // Create a change skin command
-            CmdChangeSkin *pCmd =
-                new CmdChangeSkin( pIntf, sFromLocale( pArg->psz_results[0] ) );
+            char* psz_path = vlc_uri2path( pArg->psz_results[0] );
+            if( psz_path )
+            {
+                // Create a change skin command
+                CmdChangeSkin *pCmd =
+                    new CmdChangeSkin( pIntf, psz_path );
+                free( psz_path );
 
-            // Push the command in the asynchronous command queue
-            AsyncQueue *pQueue = AsyncQueue::instance( pIntf );
-            pQueue->push( CmdGenericPtr( pCmd ) );
+                // Push the command in the asynchronous command queue
+                AsyncQueue *pQueue = AsyncQueue::instance( pIntf );
+                pQueue->push( CmdGenericPtr( pCmd ) );
+	    }
         }
     }
     else if( !pIntf->p_sys->p_theme )
@@ -66,7 +73,7 @@ void Dialogs::showPlaylistLoadCB( intf_dialog_args_t *pArg )
     {
         // Create a Playlist Load command
         CmdPlaylistLoad *pCmd =
-            new CmdPlaylistLoad( pIntf, sFromLocale( pArg->psz_results[0] ) );
+            new CmdPlaylistLoad( pIntf, pArg->psz_results[0] );
 
         // Push the command in the asynchronous command queue
         AsyncQueue *pQueue = AsyncQueue::instance( pIntf );
@@ -120,7 +127,7 @@ Dialogs::~Dialogs()
         vlc_object_release( m_pProvider );
 
         /* Unregister callbacks */
-        var_DelCallback( getIntf()->p_libvlc, "intf-popupmenu",
+        var_DelCallback( getIntf()->obj.libvlc, "intf-popupmenu",
                          PopupMenuCB, this );
     }
 }
@@ -164,21 +171,20 @@ bool Dialogs::init()
     m_pModule = module_need( m_pProvider, "dialogs provider", NULL, false );
     if( m_pModule == NULL )
     {
-        msg_Err( getIntf(), "no suitable dialogs provider found (hint: compile the qt4 plugin, and make sure it is loaded properly)" );
         vlc_object_release( m_pProvider );
         m_pProvider = NULL;
         return false;
     }
 
     /* Register callback for the intf-popupmenu variable */
-    var_AddCallback( getIntf()->p_libvlc, "intf-popupmenu",
+    var_AddCallback( getIntf()->obj.libvlc, "intf-popupmenu",
                      PopupMenuCB, this );
 
     return true;
 }
 
 
-void Dialogs::showFileGeneric( const string &rTitle, const string &rExtensions,
+void Dialogs::showFileGeneric( const std::string &rTitle, const std::string &rExtensions,
                                DlgCallback callback, int flags )
 {
     if( m_pProvider && m_pProvider->pf_show_dialog )
@@ -211,18 +217,19 @@ void Dialogs::showChangeSkin()
 
 void Dialogs::showPlaylistLoad()
 {
+    std::stringstream fileTypes;
+    fileTypes << _("Playlist Files |") << EXTENSIONS_PLAYLIST  << _("|All Files |*");
     showFileGeneric( _("Open playlist"),
-                     _("Playlist Files|"EXTENSIONS_PLAYLIST"|"
-                       "All Files|*"),
+                     fileTypes.str(),
                      showPlaylistLoadCB, kOPEN );
 }
 
 
 void Dialogs::showPlaylistSave()
 {
-    showFileGeneric( _("Save playlist"), _("XSPF playlist|*.xspf|"
-                                           "M3U file|*.m3u|"
-                                           "HTML playlist|*.html"),
+    showFileGeneric( _("Save playlist"), _("XSPF playlist |*.xspf|"
+                                           "M3U file |*.m3u|"
+                                           "HTML playlist |*.html"),
                      showPlaylistSaveCB, kSAVE );
 }
 
@@ -332,15 +339,24 @@ void Dialogs::showPopupMenu( bool bShow, int popupType = INTF_DIALOG_POPUPMENU )
 
 void Dialogs::showInteraction( interaction_dialog_t *p_dialog )
 {
-    intf_dialog_args_t *p_arg = (intf_dialog_args_t *)
-                                calloc( 1, sizeof(intf_dialog_args_t) );
-
-    p_arg->p_dialog = p_dialog;
-    p_arg->p_intf = getIntf();
-
     if( m_pProvider && m_pProvider->pf_show_dialog )
     {
+        intf_dialog_args_t *p_arg = (intf_dialog_args_t *)
+                                    calloc( 1, sizeof(intf_dialog_args_t) );
+
+        p_arg->p_dialog = p_dialog;
+        p_arg->p_intf = getIntf();
+
         m_pProvider->pf_show_dialog( m_pProvider, INTF_DIALOG_INTERACTION,
                                      0, p_arg );
+    }
+}
+
+void Dialogs::sendKey( int key )
+{
+    if( m_pProvider && m_pProvider->pf_show_dialog )
+    {
+        m_pProvider->pf_show_dialog( m_pProvider, INTF_DIALOG_SENDKEY,
+                                     key, NULL );
     }
 }

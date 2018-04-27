@@ -21,6 +21,11 @@
 #ifndef VLC_AOUT_MMDEVICE_H
 # define VLC_AOUT_MMDEVICE_H 1
 
+#define MM_PASSTHROUGH_DISABLED 0
+#define MM_PASSTHROUGH_ENABLED 1
+#define MM_PASSTHROUGH_ENABLED_HD 2
+#define MM_PASSTHROUGH_DEFAULT MM_PASSTHROUGH_DISABLED
+
 typedef struct aout_stream aout_stream_t;
 
 /**
@@ -28,7 +33,7 @@ typedef struct aout_stream aout_stream_t;
  */
 struct aout_stream
 {
-    VLC_COMMON_MEMBERS
+    struct vlc_common_members obj;
     void *sys;
 
     HRESULT (*time_get)(aout_stream_t *, mtime_t *);
@@ -49,13 +54,13 @@ struct aout_stream
  * \param fmt audio output sample format [IN/OUT]
  * \param sid audio output session GUID [IN]
  */
-HRESULT aout_stream_Start(aout_stream_t *s, audio_sample_format_t *fmt,
-                          const GUID *sid);
+typedef HRESULT (*aout_stream_start_t)(aout_stream_t *s,
+    audio_sample_format_t *fmt, const GUID *sid);
 
 /**
  * Destroys an audio output stream.
  */
-void aout_stream_Stop(aout_stream_t *);
+typedef HRESULT (*aout_stream_stop_t)(aout_stream_t *);
 
 static inline HRESULT aout_stream_TimeGet(aout_stream_t *s, mtime_t *delay)
 {
@@ -72,9 +77,19 @@ static inline HRESULT aout_stream_Pause(aout_stream_t *s, bool paused)
     return (s->pause)(s, paused);
 }
 
-static inline HRESULT aout_stream_Flush(aout_stream_t *s)
+static inline HRESULT aout_stream_Flush(aout_stream_t *s, bool wait)
 {
-    return (s->flush)(s);
+    if (wait)
+    {   /* Loosy drain emulation */
+        mtime_t delay;
+
+        if (SUCCEEDED(aout_stream_TimeGet(s, &delay))
+         && delay <= INT64_C(5000000))
+            Sleep((delay / (CLOCK_FREQ / 1000)) + 1);
+        return S_OK;
+    }
+    else
+        return (s->flush)(s);
 }
 
 static inline

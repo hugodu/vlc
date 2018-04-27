@@ -42,6 +42,10 @@
 
 #include <ass/ass.h>
 
+#if LIBASS_VERSION < 0x01300000
+# define ASS_FONTPROVIDER_AUTODETECT 1
+#endif
+
 #if defined(_WIN32)
 #   include <vlc_charset.h>
 #endif
@@ -55,7 +59,7 @@ static void Destroy( vlc_object_t * );
 vlc_module_begin ()
     set_shortname( N_("Subtitles (advanced)"))
     set_description( N_("Subtitle renderers using libass") )
-    set_capability( "decoder", 100 )
+    set_capability( "spu decoder", 100 )
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_SCODEC )
     set_callbacks( Create, Destroy )
@@ -64,7 +68,8 @@ vlc_module_end ()
 /*****************************************************************************
  * Local prototypes
  *****************************************************************************/
-static subpicture_t *DecodeBlock( decoder_t *, block_t ** );
+static int DecodeBlock( decoder_t *, block_t * );
+static void Flush( decoder_t * );
 
 /* */
 struct decoder_sys_t
@@ -131,7 +136,8 @@ static int Create( vlc_object_t *p_this )
     if( p_dec->fmt_in.i_codec != VLC_CODEC_SSA )
         return VLC_EGENERIC;
 
-    p_dec->pf_decode_sub = DecodeBlock;
+    p_dec->pf_decode = DecodeBlock;
+    p_dec->pf_flush  = Flush;
 
     p_dec->p_sys = p_sys = malloc( sizeof( decoder_sys_t ) );
     if( !p_sys )
@@ -206,13 +212,31 @@ static int Create( vlc_object_t *p_this )
     ass_set_use_margins( p_renderer, false);
     //if( false )
     //    ass_set_margins( p_renderer, int t, int b, int l, int r);
-    ass_set_hinting( p_renderer, ASS_HINTING_LIGHT );
     ass_set_font_scale( p_renderer, 1.0 );
     ass_set_line_spacing( p_renderer, 0.0 );
 
 #if defined( __ANDROID__ )
-    const char *psz_font = "/system/fonts/DroidSans-Bold.ttf";
-    const char *psz_family = "Droid Sans Bold";
+    const char *psz_font, *psz_family;
+    const char *psz_font_droid = "/system/fonts/DroidSans-Bold.ttf";
+    const char *psz_family_droid = "Droid Sans Bold";
+    const char *psz_font_noto = "/system/fonts/NotoSansCJK-Regular.ttc";
+    const char *psz_family_noto = "Noto Sans";
+
+    // Workaround for Android 5.0+, since libass doesn't parse the XML yet
+    if( access( psz_font_noto, R_OK ) != -1 )
+    {
+        psz_font = psz_font_noto;
+        psz_family = psz_family_noto;
+    }
+    else
+    {
+        psz_font = psz_font_droid;
+        psz_family = psz_family_droid;
+    }
+
+#elif defined( __APPLE__ )
+    const char *psz_font = NULL; /* We don't ship a default font with VLC */
+    const char *psz_family = "Helvetica Neue"; /* Use HN if we can't find anything more suitable - Arial is not on all Apple platforms */
 #else
     const char *psz_font = NULL; /* We don't ship a default font with VLC */
     const char *psz_family = "Arial"; /* Use Arial if we can't find anything more suitable */
@@ -220,24 +244,24 @@ static int Create( vlc_object_t *p_this )
 
 #ifdef HAVE_FONTCONFIG
 #if defined(_WIN32)
-    dialog_progress_bar_t *p_dialog =
-        dialog_ProgressCreate( p_dec,
-                               _("Building font cache"),
-                               _( "Please wait while your font cache is rebuilt.\n"
-                                  "This should take less than a minute." ), NULL );
+    vlc_dialog_id *p_dialog_id =
+        vlc_dialog_display_progress( p_dec, true, 0.0, NULL,
+                                    _("Building font cache"),
+                                    _( "Please wait while your font cache is rebuilt.\n"
+                                    "This should take less than a minute." ) );
 #endif
-    ass_set_fonts( p_renderer, psz_font, psz_family, true, NULL, 1 );  // setup default font/family
-#ifdef _WIN32
-    if( p_dialog )
-    {
-        dialog_ProgressSet( p_dialog, NULL, 1.0 );
-        dialog_ProgressDestroy( p_dialog );
-    }
+    ass_set_fonts( p_renderer, psz_font, psz_family, ASS_FONTPROVIDER_AUTODETECT, NULL, 1 );  // setup default font/family
+#if defined(_WIN32)
+    if( p_dialog_id != 0 )
+        vlc_dialog_release( p_dec, p_dialog_id );
 #endif
 #else
-    /* FIXME you HAVE to give him a font if no fontconfig */
-    ass_set_fonts( p_renderer, psz_font, psz_family, false, NULL, 1 );
+    ass_set_fonts( p_renderer, psz_font, psz_family, ASS_FONTPROVIDER_AUTODETECT, NULL, 0 );
 #endif
+
+    /* Anything else than NONE will break smooth img updating.
+       TODO: List and force ASS_HINTING_LIGHT for known problematic fonts */
+    ass_set_hinting( p_renderer, ASS_HINTING_NONE );
 
     /* Add a track */
     ASS_Track *p_track = p_sys->p_track = ass_new_track( p_sys->p_library );
@@ -248,7 +272,6 @@ static int Create( vlc_object_t *p_this )
     }
     ass_process_codec_private( p_track, p_dec->fmt_in.p_extra, p_dec->fmt_in.i_extra );
 
-    p_dec->fmt_out.i_cat = SPU_ES;
     p_dec->fmt_out.i_codec = VLC_CODEC_RGBA;
 
     return VLC_SUCCESS;
@@ -293,39 +316,46 @@ static void DecSysRelease( decoder_sys_t *p_sys )
     free( p_sys );
 }
 
+/*****************************************************************************
+ * Flush:
+ *****************************************************************************/
+static void Flush( decoder_t *p_dec )
+{
+    decoder_sys_t *p_sys = p_dec->p_sys;
+
+    p_sys->i_max_stop = VLC_TS_INVALID;
+}
+
 /****************************************************************************
  * DecodeBlock:
  ****************************************************************************/
-static subpicture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
+static int DecodeBlock( decoder_t *p_dec, block_t *p_block )
 {
     decoder_sys_t *p_sys = p_dec->p_sys;
 
     subpicture_t *p_spu = NULL;
-    block_t *p_block;
 
-    if( !pp_block || *pp_block == NULL )
-        return NULL;
+    if( p_block == NULL ) /* No Drain */
+        return VLCDEC_SUCCESS;
 
-    p_block = *pp_block;
-    if( p_block->i_flags & (BLOCK_FLAG_DISCONTINUITY|BLOCK_FLAG_CORRUPTED) )
+    if( p_block->i_flags & BLOCK_FLAG_CORRUPTED )
     {
-        p_sys->i_max_stop = VLC_TS_INVALID;
+        Flush( p_dec );
         block_Release( p_block );
-        return NULL;
+        return VLCDEC_SUCCESS;
     }
-    *pp_block = NULL;
 
     if( p_block->i_buffer == 0 || p_block->p_buffer[0] == '\0' )
     {
         block_Release( p_block );
-        return NULL;
+        return VLCDEC_SUCCESS;
     }
 
     subpicture_updater_sys_t *p_spu_sys = malloc( sizeof(*p_spu_sys) );
     if( !p_spu_sys )
     {
         block_Release( p_block );
-        return NULL;
+        return VLCDEC_SUCCESS;
     }
 
     subpicture_updater_t updater = {
@@ -340,7 +370,7 @@ static subpicture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
         msg_Warn( p_dec, "can't get spu buffer" );
         free( p_spu_sys );
         block_Release( p_block );
-        return NULL;
+        return VLCDEC_SUCCESS;
     }
 
     p_spu_sys->p_img = NULL;
@@ -350,9 +380,9 @@ static subpicture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
     p_spu_sys->i_pts = p_block->i_pts;
     if( !p_spu_sys->p_subs_data )
     {
-        decoder_DeleteSubpicture( p_dec, p_spu );
+        subpicture_Delete( p_spu );
         block_Release( p_block );
-        return NULL;
+        return VLCDEC_SUCCESS;
     }
     memcpy( p_spu_sys->p_subs_data, p_block->p_buffer,
             p_block->i_buffer );
@@ -376,7 +406,8 @@ static subpicture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
 
     block_Release( p_block );
 
-    return p_spu;
+    decoder_QueueSub( p_dec, p_spu );
+    return VLCDEC_SUCCESS;
 }
 
 /****************************************************************************
@@ -394,15 +425,13 @@ static int SubpictureValidate( subpicture_t *p_subpic,
     video_format_t fmt = *p_fmt_dst;
     fmt.i_chroma         = VLC_CODEC_RGBA;
     fmt.i_bits_per_pixel = 0;
-    fmt.i_visible_width  = fmt.i_width;
-    fmt.i_visible_height = fmt.i_height;
     fmt.i_x_offset       = 0;
     fmt.i_y_offset       = 0;
     if( b_fmt_src || b_fmt_dst )
     {
-        ass_set_frame_size( p_sys->p_renderer, fmt.i_width, fmt.i_height );
-        const double src_ratio = (double)p_fmt_src->i_width / p_fmt_src->i_height;
-        const double dst_ratio = (double)p_fmt_dst->i_width / p_fmt_dst->i_height;
+        ass_set_frame_size( p_sys->p_renderer, fmt.i_visible_width, fmt.i_visible_height );
+        const double src_ratio = (double)p_fmt_src->i_visible_width / p_fmt_src->i_visible_height;
+        const double dst_ratio = (double)p_fmt_dst->i_visible_width / p_fmt_dst->i_visible_height;
         ass_set_aspect_ratio( p_sys->p_renderer, dst_ratio / src_ratio, 1 );
         p_sys->fmt = fmt;
     }
@@ -438,8 +467,8 @@ static void SubpictureUpdate( subpicture_t *p_subpic,
     ASS_Image *p_img = p_subpic->updater.p_sys->p_img;
 
     /* */
-    p_subpic->i_original_picture_height = fmt.i_height;
-    p_subpic->i_original_picture_width = fmt.i_width;
+    p_subpic->i_original_picture_height = fmt.i_visible_height;
+    p_subpic->i_original_picture_width = fmt.i_visible_width;
 
     /* XXX to improve efficiency we merge regions that are close minimizing
      * the lost surface.
@@ -612,9 +641,9 @@ static int BuildRegions( rectangle_t *p_region, int i_max_region, ASS_Image *p_i
             {
                 for( int j = i+1; j < i_region; j++ )
                 {
-                    rectangle_t n = region[i];
-                    r_add( &n, &region[j] );
-                    int ds = r_surface( &n ) - r_surface( &region[i] ) - r_surface( &region[j] );
+                    rectangle_t rect = region[i];
+                    r_add( &rect, &region[j] );
+                    int ds = r_surface( &rect ) - r_surface( &region[i] ) - r_surface( &region[j] );
 
                     if( ds < i_best_ds )
                     {
@@ -627,11 +656,14 @@ static int BuildRegions( rectangle_t *p_region, int i_max_region, ASS_Image *p_i
 #ifdef DEBUG_REGION
             msg_Err( p_spu, "Merging %d and %d", i_best_i, i_best_j );
 #endif
-            r_add( &region[i_best_i], &region[i_best_j] );
+            if( i_best_j >= 0 && i_best_i >= 0 )
+            {
+                r_add( &region[i_best_i], &region[i_best_j] );
 
-            if( i_best_j+1 < i_region )
-                memmove( &region[i_best_j], &region[i_best_j+1], sizeof(*region) * ( i_region - (i_best_j+1)  ) );
-            i_region--;
+                if( i_best_j+1 < i_region )
+                    memmove( &region[i_best_j], &region[i_best_j+1], sizeof(*region) * ( i_region - (i_best_j+1)  ) );
+                i_region--;
+            }
         }
     }
 

@@ -1,5 +1,5 @@
 /*****************************************************************************
- * dbus_tracklist.h : dbus control module (mpris v1.0) - /TrackList object
+ * dbus_tracklist.h : dbus control module (mpris v2.2) - TrackList object
  *****************************************************************************
  * Copyright © 2006-2008 Rafaël Carré
  * Copyright © 2007-2010 Mirsal Ennaime
@@ -24,8 +24,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 
-#ifndef _VLC_DBUS_TRACKLIST_H
-#define _VLC_DBUS_TRACKLIST_H
+#ifndef VLC_DBUS_DBUS_TRACKLIST_H_
+#define VLC_DBUS_DBUS_TRACKLIST_H_
 
 #include <vlc_common.h>
 #include <vlc_interface.h>
@@ -44,4 +44,4 @@ DBusHandlerResult handle_tracklist ( DBusConnection *p_conn,
 
 int TrackListPropertiesChangedEmit( intf_thread_t *, vlc_dictionary_t * );
 
-#endif //dbus_tracklist.h
+#endif /* include-guard */

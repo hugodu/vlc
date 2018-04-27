@@ -30,6 +30,7 @@
 # include "config.h"
 #endif
 
+#define VLC_MODULE_LICENSE VLC_LICENSE_GPL_2_PLUS
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_input.h>
@@ -43,6 +44,7 @@
 #include <vlc_charset.h>
 #include <vlc_strings.h>
 #include <vlc_rand.h>
+#include <vlc_memstream.h>
 
 #ifndef _WIN32
 # include <locale.h>
@@ -255,7 +257,7 @@ static int Open( vlc_object_t *p_this )
     vlc_url_t url;
 
     psz_url = var_InheritString( p_vod, "rtsp-host" );
-    vlc_UrlParse( &url, psz_url, 0 );
+    vlc_UrlParse( &url, psz_url );
     free( psz_url );
 
     p_vod->p_sys = p_sys = malloc( sizeof( vod_sys_t ) );
@@ -369,16 +371,15 @@ static vod_media_t *MediaNew( vod_t *p_vod, const char *psz_name,
 
     if( asprintf( &p_media->psz_rtsp_path, "%s%s",
                   p_sys->psz_path, psz_name ) <0 )
-        return NULL;
+        goto error;
+
     p_media->p_rtsp_url =
         httpd_UrlNew( p_sys->p_rtsp_host, p_media->psz_rtsp_path, NULL, NULL );
 
     if( !p_media->p_rtsp_url )
     {
         msg_Err( p_vod, "cannot create RTSP url (%s)", p_media->psz_rtsp_path);
-        free( p_media->psz_rtsp_path );
-        free( p_media );
-        return NULL;
+        goto error;
     }
 
     msg_Dbg( p_vod, "created RTSP url: %s", p_media->psz_rtsp_path );
@@ -386,21 +387,12 @@ static vod_media_t *MediaNew( vod_t *p_vod, const char *psz_name,
     if( asprintf( &p_media->psz_rtsp_control_v4,
                   "rtsp://%%s:%%d%s/trackID=%%d",
                   p_media->psz_rtsp_path ) < 0 )
-    {
-        httpd_UrlDelete( p_media->p_rtsp_url );
-        free( p_media->psz_rtsp_path );
-        free( p_media );
-        return NULL;
-    }
+        goto error;
+
     if( asprintf( &p_media->psz_rtsp_control_v6,
                   "rtsp://[%%s]:%%d%s/trackID=%%d",
                   p_media->psz_rtsp_path ) < 0 )
-    {
-        httpd_UrlDelete( p_media->p_rtsp_url );
-        free( p_media->psz_rtsp_path );
-        free( p_media );
-        return NULL;
-    }
+        goto error;
 
     httpd_UrlCatch( p_media->p_rtsp_url, HTTPD_MSG_SETUP,
                     RtspCallback, (void*)p_media );
@@ -431,6 +423,17 @@ static vod_media_t *MediaNew( vod_t *p_vod, const char *psz_name,
 
     CommandPush( p_vod, RTSP_CMD_TYPE_ADD, p_media, NULL, 0, 0.0, NULL );
     return p_media;
+
+error:
+    if( p_media )
+    {
+        free( p_media->psz_rtsp_control_v4 );
+        if( p_media->p_rtsp_url )
+            httpd_UrlDelete( p_media->p_rtsp_url );
+        free( p_media->psz_rtsp_path );
+        free( p_media );
+    }
+    return NULL;
 }
 
 static void MediaAskDel ( vod_t *p_vod, vod_media_t *p_media )
@@ -675,8 +678,9 @@ static int MediaAddES( vod_t *p_vod, vod_media_t *p_media, es_format_t *p_fmt )
             return VLC_EGENERIC;
     }
 
+    vod_sys_t *p_sys = p_vod->p_sys;
     p_es->p_rtsp_url =
-        httpd_UrlNew( p_vod->p_sys->p_rtsp_host, psz_urlc, NULL, NULL );
+        httpd_UrlNew( p_sys->p_rtsp_host, psz_urlc, NULL, NULL );
 
     if( !p_es->p_rtsp_url )
     {
@@ -757,7 +761,8 @@ static void CommandPush( vod_t *p_vod, rtsp_cmd_type_t i_type, vod_media_t *p_me
     p_cmd = block_Alloc( sizeof(rtsp_cmd_t) );
     memcpy( p_cmd->p_buffer, &cmd, sizeof(cmd) );
 
-    block_FifoPut( p_vod->p_sys->p_fifo_cmd, p_cmd );
+    vod_sys_t *p_sys = p_vod->p_sys;
+    block_FifoPut( p_sys->p_fifo_cmd, p_cmd );
 }
 
 static void* CommandThread( void *obj )
@@ -865,9 +870,10 @@ static rtsp_client_t *RtspClientNew( vod_media_t *p_media, char *psz_session )
     p_rtsp->psz_session = psz_session;
     TAB_APPEND( p_media->i_rtsp, p_media->rtsp, p_rtsp );
 
-    p_media->p_vod->p_sys->i_connections++;
+    vod_sys_t *p_sys = p_media->p_vod->p_sys;
+    p_sys->i_connections++;
     msg_Dbg( p_media->p_vod, "new session: %s, connections: %d",
-             psz_session, p_media->p_vod->p_sys->i_throttle_users );
+             psz_session, p_sys->i_throttle_users );
 
     return p_rtsp;
 }
@@ -885,9 +891,10 @@ static rtsp_client_t *RtspClientGet( vod_media_t *p_media, const char *psz_sessi
 
 static void RtspClientDel( vod_media_t *p_media, rtsp_client_t *p_rtsp )
 {
-    p_media->p_vod->p_sys->i_connections--;
+    vod_sys_t *p_sys = p_media->p_vod->p_sys;
+    p_sys->i_connections--;
     msg_Dbg( p_media->p_vod, "closing session: %s, connections: %d",
-             p_rtsp->psz_session, p_media->p_vod->p_sys->i_throttle_users );
+             p_rtsp->psz_session, p_sys->i_throttle_users );
 
     while( p_rtsp->i_es )
     {
@@ -930,6 +937,7 @@ static int RtspCallback( httpd_callback_sys_t *p_args, httpd_client_t *cl,
 {
     vod_media_t *p_media = (vod_media_t*)p_args;
     vod_t *p_vod = p_media->p_vod;
+    vod_sys_t *p_sys = p_vod->p_sys;
     const char *psz_transport = NULL;
     const char *psz_playnow = NULL; /* support option: x-playNow */
     const char *psz_session = NULL;
@@ -971,7 +979,7 @@ static int RtspCallback( httpd_callback_sys_t *p_args, httpd_client_t *cl,
                 if( strstr( psz_transport, "MP2T/H2221/UDP" ) ||
                     strstr( psz_transport, "RAW/RAW/UDP" ) )
                 {
-                    p_media->psz_mux = p_vod->p_sys->psz_raw_mux;
+                    p_media->psz_mux = p_sys->psz_raw_mux;
                     p_media->b_raw = true;
                 }
 
@@ -990,8 +998,8 @@ static int RtspCallback( httpd_callback_sys_t *p_args, httpd_client_t *cl,
                 if( !psz_session || !*psz_session )
                 {
                     char *psz_new;
-                    if( ( p_vod->p_sys->i_throttle_users > 0 ) &&
-                        ( p_vod->p_sys->i_connections >= p_vod->p_sys->i_throttle_users ) )
+                    if( ( p_sys->i_throttle_users > 0 ) &&
+                        ( p_sys->i_connections >= p_sys->i_throttle_users ) )
                     {
                         answer->i_status = 503;
                         answer->i_body = 0;
@@ -1060,7 +1068,7 @@ static int RtspCallback( httpd_callback_sys_t *p_args, httpd_client_t *cl,
             /* Intentional fall-through on x-playNow option in RTSP request */
             if( !psz_playnow )
                 break;
-        }
+        }   /* fall through */
 
         case HTTPD_MSG_PLAY:
         {
@@ -1249,9 +1257,9 @@ static int RtspCallback( httpd_callback_sys_t *p_args, httpd_client_t *cl,
 
     if( psz_session )
     {
-         if( p_media->p_vod->p_sys->i_session_timeout >= 0 )
+         if( p_sys->i_session_timeout >= 0 )
              httpd_MsgAdd( answer, "Session", "%s;timeout=%i", psz_session,
-               p_media->p_vod->p_sys->i_session_timeout );
+               p_sys->i_session_timeout );
          else
               httpd_MsgAdd( answer, "Session", "%s", psz_session );
     }
@@ -1266,6 +1274,7 @@ static int RtspCallbackES( httpd_callback_sys_t *p_args, httpd_client_t *cl,
     media_es_t *p_es = (media_es_t*)p_args;
     vod_media_t *p_media = p_es->p_media;
     vod_t *p_vod = p_media->p_vod;
+    vod_sys_t *p_sys = p_vod->p_sys;
     rtsp_client_t *p_rtsp = NULL;
     const char *psz_transport = NULL;
     const char *psz_playnow = NULL; /* support option: x-playNow */
@@ -1316,8 +1325,8 @@ static int RtspCallbackES( httpd_callback_sys_t *p_args, httpd_client_t *cl,
                 if( !psz_session || !*psz_session )
                 {
                     char *psz_new;
-                    if( ( p_vod->p_sys->i_throttle_users > 0 ) &&
-                        ( p_vod->p_sys->i_connections >= p_vod->p_sys->i_throttle_users ) )
+                    if( ( p_sys->i_throttle_users > 0 ) &&
+                        ( p_sys->i_connections >= p_sys->i_throttle_users ) )
                     {
                         answer->i_status = 503;
                         answer->i_body = 0;
@@ -1398,6 +1407,7 @@ static int RtspCallbackES( httpd_callback_sys_t *p_args, httpd_client_t *cl,
             /* Intentional fall-through on x-playNow option in RTSP request */
             if( !psz_playnow )
                 break;
+            /* fall through */
 
         case HTTPD_MSG_PLAY:
             /* This is kind of a kludge. Should we only support Aggregate
@@ -1473,7 +1483,6 @@ static int RtspCallbackES( httpd_callback_sys_t *p_args, httpd_client_t *cl,
 
         default:
             return VLC_EGENERIC;
-            break;
     }
 
     httpd_MsgAdd( answer, "Server", "VLC/%s", VERSION );
@@ -1498,7 +1507,8 @@ static int RtspCallbackES( httpd_callback_sys_t *p_args, httpd_client_t *cl,
  *****************************************************************************/
 static char *SDPGenerate( const vod_media_t *p_media, httpd_client_t *cl )
 {
-    char *psz_sdp, ip[NI_MAXNUMERICHOST];
+    struct vlc_memstream sdp;
+    char ip[NI_MAXNUMERICHOST];
     const char *psz_control;
     int port;
 
@@ -1520,15 +1530,14 @@ static char *SDPGenerate( const vod_media_t *p_media, httpd_client_t *cl )
     dst.ss_len = dstlen;
 #endif
 
-    psz_sdp = vlc_sdp_Start( VLC_OBJECT( p_media->p_vod ), "sout-rtp-",
-                             NULL, 0, (struct sockaddr *)&dst, dstlen );
-    if( psz_sdp == NULL )
+    if( vlc_sdp_Start( &sdp, VLC_OBJECT( p_media->p_vod ), "sout-rtp-",
+                       NULL, 0, (struct sockaddr *)&dst, dstlen ) )
         return NULL;
 
     if( p_media->i_length > 0 )
     {
         lldiv_t d = lldiv( p_media->i_length / 1000, 1000 );
-        sdp_AddAttribute( &psz_sdp, "range","npt=0-%lld.%03u", d.quot,
+        sdp_AddAttribute( &sdp, "range","npt=0-%lld.%03u", d.quot,
                           (unsigned)d.rem );
     }
 
@@ -1552,13 +1561,13 @@ static char *SDPGenerate( const vod_media_t *p_media, httpd_client_t *cl )
                 continue;
         }
 
-        sdp_AddMedia( &psz_sdp, mime_major, "RTP/AVP", 0 /* p_es->i_port */,
+        sdp_AddMedia( &sdp, mime_major, "RTP/AVP", 0 /* p_es->i_port */,
                       p_es->i_payload_type, false, 0,
                       p_es->psz_ptname, p_es->i_clock_rate, p_es->i_channels,
                       p_es->psz_fmtp );
 
-        sdp_AddAttribute( &psz_sdp, "control", psz_control, ip, port, i );
+        sdp_AddAttribute( &sdp, "control", psz_control, ip, port, i );
     }
 
-    return psz_sdp;
+    return vlc_memstream_close( &sdp ) ? NULL : sdp.ptr;
 }

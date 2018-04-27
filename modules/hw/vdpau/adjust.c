@@ -29,39 +29,16 @@
 #include <vlc_plugin.h>
 #include <vlc_filter.h>
 #include <vlc_atomic.h>
+#include <vlc_picture.h>
 #include "vlc_vdpau.h"
 
 struct filter_sys_t
 {
-    atomic_uint_fast32_t brightness;
-    atomic_uint_fast32_t contrast;
-    atomic_uint_fast32_t saturation;
-    atomic_uint_fast32_t hue;
+    vlc_atomic_float brightness;
+    vlc_atomic_float contrast;
+    vlc_atomic_float saturation;
+    vlc_atomic_float hue;
 };
-
-static inline void vlc_atomic_init_float(atomic_uint_fast32_t *var, float val)
-{
-    union { uint32_t u; float f; } u;
-
-    u.f = val;
-    atomic_init(var, u.u);
-}
-
-static inline void vlc_atomic_store_float(atomic_uint_fast32_t *var, float val)
-{
-    union { uint32_t u; float f; } u;
-
-    u.f = val;
-    atomic_store(var, u.u);
-}
-
-static inline float vlc_atomic_load_float(atomic_uint_fast32_t *var)
-{
-    union { uint32_t u; float f; } u;
-
-    u.u = atomic_load(var);
-    return u.f;
-}
 
 static float vlc_to_vdp_brightness(float brightness)
 {
@@ -108,19 +85,22 @@ static int SaturationCallback(vlc_object_t *obj, const char *varname,
     return VLC_SUCCESS;
 }
 
-static float vlc_to_vdp_hue(int hue)
+static float vlc_to_vdp_hue(float hue)
 {
-    hue %= 360;
-    if (hue > 180)
-        hue -= 360;
-    return (float)hue * (float)(M_PI / 180.);
+    float dummy;
+
+    hue /= 360.f;
+    hue = modff(hue, &dummy);
+    if (hue > .5f)
+        hue -= 1.f;
+    return hue * (float)(2. * M_PI);
 }
 
 static int HueCallback(vlc_object_t *obj, const char *varname,
                               vlc_value_t prev, vlc_value_t cur, void *data)
 {
 
-    vlc_atomic_store_float(data, vlc_to_vdp_hue(cur.i_int));
+    vlc_atomic_store_float(data, vlc_to_vdp_hue(cur.f_float));
     (void) obj; (void) varname; (void) prev;
     return VLC_SUCCESS;
 }
@@ -128,7 +108,7 @@ static int HueCallback(vlc_object_t *obj, const char *varname,
 static picture_t *Adjust(filter_t *filter, picture_t *pic)
 {
     filter_sys_t *sys = filter->p_sys;
-    vlc_vdp_video_field_t *f = pic->context;
+    vlc_vdp_video_field_t *f = (vlc_vdp_video_field_t *)pic->context;
 
     if (unlikely(f == NULL))
         return pic;
@@ -149,8 +129,9 @@ static int Open(vlc_object_t *obj)
 {
     filter_t *filter = (filter_t *)obj;
 
-    if (filter->fmt_in.video.i_chroma != VLC_CODEC_VDPAU_VIDEO_422
-     && filter->fmt_in.video.i_chroma != VLC_CODEC_VDPAU_VIDEO_420)
+    if (filter->fmt_in.video.i_chroma != VLC_CODEC_VDPAU_VIDEO_420
+     && filter->fmt_in.video.i_chroma != VLC_CODEC_VDPAU_VIDEO_422
+     && filter->fmt_in.video.i_chroma != VLC_CODEC_VDPAU_VIDEO_444)
         return VLC_EGENERIC;
     if (!video_format_IsSimilar(&filter->fmt_in.video, &filter->fmt_out.video))
         return VLC_EGENERIC;
@@ -181,9 +162,9 @@ static int Open(vlc_object_t *obj)
                     &sys->saturation);
     vlc_atomic_init_float(&sys->saturation, vlc_to_vdp_saturation(f));
 
-    i = var_CreateGetIntegerCommand(filter, "hue");
+    i = var_CreateGetFloatCommand(filter, "hue");
     var_AddCallback(filter, "hue", HueCallback, &sys->hue);
-    vlc_atomic_init_float(&sys->saturation, vlc_to_vdp_saturation(i));
+    vlc_atomic_init_float(&sys->hue, vlc_to_vdp_hue(i));
 
     return VLC_SUCCESS;
 }
@@ -206,7 +187,7 @@ vlc_module_begin()
     set_description(N_("VDPAU adjust video filter"))
     set_category(CAT_VIDEO)
     set_subcategory(SUBCAT_VIDEO_VFILTER)
-    set_capability("video filter2", 0)
+    set_capability("video filter", 0)
     add_shortcut("adjust")
     set_callbacks(Open, Close)
 vlc_module_end()

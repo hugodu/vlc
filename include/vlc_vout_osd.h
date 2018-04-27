@@ -26,11 +26,17 @@
 #ifndef VLC_VOUT_OSD_H
 #define VLC_VOUT_OSD_H 1
 
-#include <vlc_spu.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * \defgroup osd On-screen display
+ * \ingroup spu
+ * @{
+ * \file
+ * Overlay text and widgets
+ */
 
 /**
  * OSD menu position and picture type defines
@@ -47,9 +53,6 @@ enum
     OSD_VERT_SLIDER,
 };
 
-/**********************************************************************
- * Vout text and widget overlays
- **********************************************************************/
 VLC_API int vout_OSDEpg( vout_thread_t *, input_item_t * );
 
 /**
@@ -90,6 +93,7 @@ VLC_API void vout_OSDSlider( vout_thread_t *, int, int , short );
  */
 VLC_API void vout_OSDIcon( vout_thread_t *, int, short );
 
+/** @} */
 #ifdef __cplusplus
 }
 #endif

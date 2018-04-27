@@ -156,10 +156,12 @@ static void CloseDecoder  ( vlc_object_t * );
 static int OpenPacketizer( vlc_object_t *p_this );
 #endif
 
-static subpicture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block );
+static int  DecodeSub( decoder_t *p_dec, block_t *p_block );
+static block_t * Packetize( decoder_t *p_dec, block_t **pp_block );
+static void Flush( decoder_t * );
 static int ProcessHeaders( decoder_t *p_dec );
-static subpicture_t *ProcessPacket( decoder_t *p_dec, kate_packet *p_kp,
-                            block_t **pp_block );
+static void         *ProcessPacket( decoder_t *p_dec, kate_packet *p_kp,
+                            block_t *p_block );
 static subpicture_t *DecodePacket( decoder_t *p_dec, kate_packet *p_kp,
                             block_t *p_block );
 static void ParseKateComments( decoder_t * );
@@ -177,11 +179,6 @@ static void UpdateTigerBackgroundColor( decoder_t *p_dec );
 static void UpdateTigerFontEffect( decoder_t *p_dec );
 static void UpdateTigerQuality( decoder_t *p_dec );
 static void UpdateTigerFontDesc( decoder_t *p_dec );
-static int TigerConfigurationCallback( vlc_object_t *p_this, const char *psz_var,
-                                       vlc_value_t oldvar, vlc_value_t newval,
-                                       void *p_data );
-static int OnConfigurationChanged( decoder_t *p_dec, const char *psz_var,
-                                   vlc_value_t oldval, vlc_value_t newval);
 #endif
 
 #define DEFAULT_NAME "Default"
@@ -193,7 +190,7 @@ static int OnConfigurationChanged( decoder_t *p_dec, const char *psz_var,
 
 #define FORMAT_TEXT N_("Formatted Subtitles")
 #define FORMAT_LONGTEXT N_("Kate streams allow for text formatting. " \
- "VLC partly implements this, but you can choose to disable all formatting." \
+ "VLC partly implements this, but you can choose to disable all formatting. " \
  "Note that this has no effect is rendering via Tiger is enabled.")
 
 #ifdef HAVE_TIGER
@@ -271,7 +268,7 @@ vlc_module_begin ()
     set_shortname( N_("Kate"))
     set_description( N_("Kate overlay decoder") )
     set_help( HELP_TEXT )
-    set_capability( "decoder", 50 )
+    set_capability( "spu decoder", 50 )
     set_callbacks( OpenDecoder, CloseDecoder )
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_SCODEC )
@@ -350,10 +347,9 @@ static int OpenDecoder( vlc_object_t *p_this )
     msg_Dbg( p_dec, "kate: OpenDecoder");
 
     /* Set callbacks */
-    p_dec->pf_decode_sub = (subpicture_t *(*)(decoder_t *, block_t **))
-        DecodeBlock;
-    p_dec->pf_packetize    = (block_t *(*)(decoder_t *, block_t **))
-        DecodeBlock;
+    p_dec->pf_decode    = DecodeSub;
+    p_dec->pf_packetize = Packetize;
+    p_dec->pf_flush     = Flush;
 
     /* Allocate the memory needed to store the decoder's structure */
     if( ( p_dec->p_sys = p_sys = malloc(sizeof(*p_sys)) ) == NULL )
@@ -421,7 +417,7 @@ static int OpenDecoder( vlc_object_t *p_this )
 
 #endif
 
-    es_format_Init( &p_dec->fmt_out, SPU_ES, 0 );
+    p_dec->fmt_out.i_codec = 0; // may vary during the stream
 
     /* add the decoder to the global list */
     decoder_t **list = realloc( kate_decoder_list, (kate_decoder_list_size+1) * sizeof( *list ));
@@ -440,12 +436,13 @@ static int OpenDecoder( vlc_object_t *p_this )
 static int OpenPacketizer( vlc_object_t *p_this )
 {
     decoder_t *p_dec = (decoder_t*)p_this;
+    decoder_sys_t *p_sys = p_dec->p_sys;
 
     int i_ret = OpenDecoder( p_this );
 
     if( i_ret == VLC_SUCCESS )
     {
-        p_dec->p_sys->b_packetizer = true;
+        p_sys->b_packetizer = true;
         p_dec->fmt_out.i_codec = VLC_CODEC_KATE;
     }
 
@@ -453,21 +450,31 @@ static int OpenPacketizer( vlc_object_t *p_this )
 }
 #endif
 
+/*****************************************************************************
+ * Flush:
+ *****************************************************************************/
+static void Flush( decoder_t *p_dec )
+{
+    decoder_sys_t *p_sys = p_dec->p_sys;
+
+#ifdef HAVE_TIGER
+    /* Hmm, should we wait before flushing the renderer ? I think not, but not certain... */
+    vlc_mutex_lock( &p_sys->lock );
+    tiger_renderer_seek( p_sys->p_tr, 0 );
+    vlc_mutex_unlock( &p_sys->lock );
+#endif
+    p_sys->i_max_stop = VLC_TS_INVALID;
+}
+
 /****************************************************************************
  * DecodeBlock: the whole thing
  ****************************************************************************
  * This function must be fed with kate packets.
  ****************************************************************************/
-static subpicture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
+static void *DecodeBlock( decoder_t *p_dec, block_t *p_block )
 {
     decoder_sys_t *p_sys = p_dec->p_sys;
-    block_t *p_block;
     kate_packet kp;
-
-    if( !pp_block || !*pp_block )
-        return NULL;
-
-    p_block = *pp_block;
 
     if( p_block->i_flags & (BLOCK_FLAG_DISCONTINUITY|BLOCK_FLAG_CORRUPTED) )
     {
@@ -480,9 +487,12 @@ static subpicture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
             vlc_mutex_unlock( &p_sys->lock );
         }
 #endif
-        p_sys->i_max_stop = VLC_TS_INVALID;
-        block_Release( p_block );
-        return NULL;
+        if( p_block->i_flags & BLOCK_FLAG_CORRUPTED )
+        {
+            p_sys->i_max_stop = VLC_TS_INVALID;
+            block_Release( p_block );
+            return NULL;
+        }
     }
 
     /* Block to Kate packet */
@@ -492,13 +502,34 @@ static subpicture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
     {
         if( ProcessHeaders( p_dec ) )
         {
-            block_Release( *pp_block );
+            block_Release( p_block );
             return NULL;
         }
         p_sys->b_has_headers = true;
     }
 
-    return ProcessPacket( p_dec, &kp, pp_block );
+    return ProcessPacket( p_dec, &kp, p_block );
+}
+
+static int DecodeSub( decoder_t *p_dec, block_t *p_block )
+{
+    if( p_block == NULL ) /* No Drain */
+        return VLCDEC_SUCCESS;
+
+    subpicture_t *p_spu = DecodeBlock( p_dec, p_block );
+    if( p_spu != NULL )
+        decoder_QueueSub( p_dec, p_spu );
+    return VLCDEC_SUCCESS;
+}
+
+static block_t *Packetize( decoder_t *p_dec, block_t **pp_block )
+{
+    if( pp_block == NULL ) /* No Drain */
+        return NULL;
+    block_t *p_block = *pp_block; *pp_block = NULL;
+    if( p_block == NULL )
+        return NULL;
+    return DecodeBlock( p_dec, p_block );
 }
 
 /*****************************************************************************
@@ -515,21 +546,18 @@ static int ProcessHeaders( decoder_t *p_dec )
     if( xiph_SplitHeaders( pi_size, pp_data, &i_count,
                            p_dec->fmt_in.i_extra, p_dec->fmt_in.p_extra) )
         return VLC_EGENERIC;
-    int i_ret = VLC_SUCCESS;
+
     if( i_count < 1 )
-    {
-        i_ret = VLC_EGENERIC;
-        goto end;
-    }
+        return VLC_EGENERIC;
 
     /* Take care of the initial Kate header */
     kp.nbytes = pi_size[0];
     kp.data   = pp_data[0];
-    i_ret = kate_decode_headerin( &p_sys->ki, &p_sys->kc, &kp );
+    int i_ret = kate_decode_headerin( &p_sys->ki, &p_sys->kc, &kp );
     if( i_ret < 0 )
     {
         msg_Err( p_dec, "this bitstream does not contain Kate data (%d)", i_ret );
-        goto end;
+        return VLC_EGENERIC;
     }
 
     msg_Dbg( p_dec, "%s %s text, granule rate %f, granule shift %d",
@@ -546,7 +574,7 @@ static int ProcessHeaders( decoder_t *p_dec )
         if( i_ret < 0 )
         {
             msg_Err( p_dec, "Kate header %d is corrupted: %d", i_headeridx, i_ret );
-            goto end;
+            return VLC_EGENERIC;
         }
 
         /* header 1 is comments */
@@ -573,37 +601,35 @@ static int ProcessHeaders( decoder_t *p_dec )
 #ifdef ENABLE_PACKETIZER
     else
     {
+        void* p_extra = realloc( p_dec->fmt_out.p_extra,
+                                 p_dec->fmt_in.i_extra );
+        if( unlikely( p_extra == NULL ) )
+        {
+            return VLC_ENOMEM;
+        }
+        p_dec->fmt_out.p_extra = p_extra;
         p_dec->fmt_out.i_extra = p_dec->fmt_in.i_extra;
-        p_dec->fmt_out.p_extra = xrealloc( p_dec->fmt_out.p_extra,
-                                                  p_dec->fmt_out.i_extra );
         memcpy( p_dec->fmt_out.p_extra,
                 p_dec->fmt_in.p_extra, p_dec->fmt_out.i_extra );
     }
 #endif
 
-end:
-    for( unsigned i = 0; i < i_count; i++ )
-        free( pp_data[i] );
-    return i_ret < 0 ? VLC_EGENERIC : VLC_SUCCESS;
+    return VLC_SUCCESS;
 }
 
 /*****************************************************************************
  * ProcessPacket: processes a kate packet.
  *****************************************************************************/
-static subpicture_t *ProcessPacket( decoder_t *p_dec, kate_packet *p_kp,
-                            block_t **pp_block )
+static void *ProcessPacket( decoder_t *p_dec, kate_packet *p_kp,
+                            block_t *p_block )
 {
     decoder_sys_t *p_sys = p_dec->p_sys;
-    block_t *p_block = *pp_block;
-    subpicture_t *p_buf = NULL;
 
     /* Date management */
     if( p_block->i_pts > VLC_TS_INVALID && p_block->i_pts != p_sys->i_pts )
     {
         p_sys->i_pts = p_block->i_pts;
     }
-
-    *pp_block = NULL; /* To avoid being fed the same packet again */
 
 #ifdef ENABLE_PACKETIZER
     if( p_sys->b_packetizer )
@@ -615,19 +641,16 @@ static subpicture_t *ProcessPacket( decoder_t *p_dec, kate_packet *p_kp,
             p_block->i_length = p_sys->i_pts - p_block->i_pts;
         else
             p_block->i_length = 0;
-
-        p_buf = p_block;
+        return p_block;
     }
     else
 #endif
     {
-        p_buf = DecodePacket( p_dec, p_kp, p_block );
+        subpicture_t *p_buf = DecodePacket( p_dec, p_kp, p_block );
 
-        if( p_block )
-            block_Release( p_block );
+        block_Release( p_block );
+        return p_buf;
     }
-
-    return p_buf;
 }
 
 /* nicked off blend.c */
@@ -659,7 +682,7 @@ static void GetVideoSize( decoder_t *p_dec, int *w, int *h )
         *w = p_sys->ki.original_canvas_width;
         *h = p_sys->ki.original_canvas_height;
         msg_Dbg( p_dec, "original canvas %zu %zu",
-	         p_sys->ki.original_canvas_width, p_sys->ki.original_canvas_height );
+                 p_sys->ki.original_canvas_width, p_sys->ki.original_canvas_height );
     }
     else
     {
@@ -708,27 +731,21 @@ static void SetupText( decoder_t *p_dec, subpicture_t *p_spu, const kate_event *
     switch( ev->text_markup_type )
     {
         case kate_markup_none:
-            p_spu->p_region->psz_text = strdup( ev->text ); /* no leak, this actually gets killed by the core */
-            break;
         case kate_markup_simple:
             if( p_sys->b_formatted )
-            {
-                /* the HTML renderer expects a top level text tag pair */
-                char *buffer = NULL;
-                if( asprintf( &buffer, "<text>%s</text>", ev->text ) >= 0 )
-                {
-                    p_spu->p_region->psz_html = buffer;
-                }
-                break;
-            }
-            /* if not formatted, we fall through */
+//                p_spu->p_region->p_text = ParseSubtitles(&p_spu->p_region->i_align, ev->text );
+                ;//FIXME
+            else
+                p_spu->p_region->p_text = text_segment_New( ev->text ); /* no leak, this actually gets killed by the core */
+            break;
         default:
             /* we don't know about this one, so remove markup and display as text */
             {
                 char *copy = strdup( ev->text );
                 size_t len0 = strlen( copy ) + 1;
                 kate_text_remove_markup( ev->text_encoding, copy, &len0 );
-                p_spu->p_region->psz_text = copy;
+                p_spu->p_region->p_text = text_segment_New( copy );
+                free( copy );
             }
             break;
     }
@@ -1003,114 +1020,6 @@ static void UpdateTigerFontEffect( decoder_t *p_dec )
     p_sys->b_dirty = true;
 }
 
-static int OnConfigurationChanged( decoder_t *p_dec, const char *psz_var,
-                                   vlc_value_t oldval, vlc_value_t newval )
-{
-    decoder_sys_t *p_sys = (decoder_sys_t*)p_dec->p_sys;
-
-    VLC_UNUSED( oldval );
-
-    vlc_mutex_lock( &p_sys->lock );
-
-    msg_Dbg( p_dec, "OnConfigurationChanged: %s", psz_var );
-
-    if( !p_sys->b_use_tiger || !p_sys->p_tr )
-    {
-        vlc_mutex_unlock( &p_sys->lock );
-        return VLC_SUCCESS;
-    }
-
-#define TEST_TIGER_VAR( name ) \
-    if( !strcmp( name, psz_var ) )
-
-    TEST_TIGER_VAR( "kate-tiger-quality" )
-    {
-        p_sys->f_tiger_quality = newval.f_float;
-        UpdateTigerQuality( p_dec );
-    }
-
-    TEST_TIGER_VAR( "kate-tiger-default-font-desc" )
-    {
-        if( p_sys->psz_tiger_default_font_desc )
-        {
-            free( p_sys->psz_tiger_default_font_desc );
-            p_sys->psz_tiger_default_font_desc = NULL;
-        }
-        if( newval.psz_string )
-        {
-            p_sys->psz_tiger_default_font_desc = strdup( newval.psz_string );
-        }
-        UpdateTigerFontDesc( p_dec );
-    }
-
-    TEST_TIGER_VAR( "kate-tiger-default-font-color" )
-    {
-        p_sys->i_tiger_default_font_color = (p_sys->i_tiger_default_font_color & 0xff00000000) | newval.i_int;
-        UpdateTigerFontColor( p_dec );
-    }
-
-    TEST_TIGER_VAR( "kate-tiger-default-font-alpha" )
-    {
-        p_sys->i_tiger_default_font_color = (p_sys->i_tiger_default_font_color & 0x00ffffff) | (newval.i_int<<24);
-        UpdateTigerFontColor( p_dec );
-    }
-
-    TEST_TIGER_VAR( "kate-tiger-default-background-color" )
-    {
-        p_sys->i_tiger_default_background_color = (p_sys->i_tiger_default_background_color & 0xff00000000) | newval.i_int;
-        UpdateTigerBackgroundColor( p_dec );
-    }
-
-    TEST_TIGER_VAR( "kate-tiger-default-background-alpha" )
-    {
-        p_sys->i_tiger_default_background_color = (p_sys->i_tiger_default_background_color & 0x00ffffff) | (newval.i_int<<24);
-        UpdateTigerBackgroundColor( p_dec );
-    }
-
-    TEST_TIGER_VAR( "kate-tiger-default-font-effect" )
-    {
-        p_sys->e_tiger_default_font_effect = (tiger_font_effect)newval.i_int;
-        UpdateTigerFontEffect( p_dec );
-    }
-
-    TEST_TIGER_VAR( "kate-tiger-default-font-effect-strength" )
-    {
-        p_sys->f_tiger_default_font_effect_strength = newval.f_float;
-        UpdateTigerFontEffect( p_dec );
-    }
-
-#undef TEST_TIGER_VAR
-
-    vlc_mutex_unlock( &p_sys->lock );
-
-    return VLC_SUCCESS;
-}
-
-static int TigerConfigurationCallback( vlc_object_t *p_this, const char *psz_var,
-                                       vlc_value_t oldval, vlc_value_t newval,
-                                       void *p_data )
-{
-    size_t i_idx;
-
-    VLC_UNUSED( p_this );
-    VLC_UNUSED( oldval );
-    VLC_UNUSED( newval );
-    VLC_UNUSED( p_data );
-
-    vlc_mutex_lock( &kate_decoder_list_mutex );
-
-    /* Update all existing decoders from the global user prefs */
-    for( i_idx = 0; i_idx < kate_decoder_list_size; i_idx++ )
-    {
-        decoder_t *p_dec = kate_decoder_list[ i_idx ];
-        OnConfigurationChanged( p_dec, psz_var, oldval, newval );
-    }
-
-    vlc_mutex_unlock( &kate_decoder_list_mutex );
-
-    return VLC_SUCCESS;
-}
-
 #endif
 
 /*****************************************************************************
@@ -1176,7 +1085,8 @@ static subpicture_t *DecodePacket( decoder_t *p_dec, kate_packet *p_kp, block_t 
     }
 
     p_spu->i_start = p_block->i_pts;
-    p_spu->i_stop = p_block->i_pts + INT64_C(1000000)*ev->duration*p_sys->ki.gps_denominator/p_sys->ki.gps_numerator;
+    p_spu->i_stop = p_block->i_pts + CLOCK_FREQ *
+        ev->duration * p_sys->ki.gps_denominator / p_sys->ki.gps_numerator;
     p_spu->b_ephemer = false;
     p_spu->b_absolute = false;
 
@@ -1224,8 +1134,6 @@ static subpicture_t *SetupSimpleKateSPU( decoder_t *p_dec, subpicture_t *p_spu,
     p_spu->i_original_picture_height = p_sys->ki.original_canvas_height;
 
     /* Create a new subpicture region */
-    memset( &fmt, 0, sizeof(video_format_t) );
-
     if (p_sys->b_formatted)
     {
         i_ret = kate_tracker_init( &kin, &p_sys->ki, ev );
@@ -1254,8 +1162,7 @@ static subpicture_t *SetupSimpleKateSPU( decoder_t *p_dec, subpicture_t *p_spu,
     if (ev->bitmap && ev->bitmap->type==kate_bitmap_type_paletted && ev->palette) {
 
         /* create a separate region for the bitmap */
-        memset( &fmt, 0, sizeof(video_format_t) );
-        fmt.i_chroma = VLC_CODEC_YUVP;
+        video_format_Init( &fmt, VLC_CODEC_YUVP );
         fmt.i_width = fmt.i_visible_width = ev->bitmap->width;
         fmt.i_height = fmt.i_visible_height = ev->bitmap->height;
         fmt.i_x_offset = fmt.i_y_offset = 0;
@@ -1263,10 +1170,11 @@ static subpicture_t *SetupSimpleKateSPU( decoder_t *p_dec, subpicture_t *p_spu,
         CreateKatePalette( fmt.p_palette, ev->palette );
 
         p_bitmap_region = subpicture_region_New( &fmt );
+        video_format_Clean( &fmt );
         if( !p_bitmap_region )
         {
             msg_Err( p_dec, "cannot allocate SPU region" );
-            decoder_DeleteSubpicture( p_dec, p_spu );
+            subpicture_Delete( p_spu );
             return NULL;
         }
 
@@ -1277,16 +1185,19 @@ static subpicture_t *SetupSimpleKateSPU( decoder_t *p_dec, subpicture_t *p_spu,
     }
 
     /* text region */
-    fmt.i_chroma = VLC_CODEC_TEXT;
+    video_format_Init( &fmt, VLC_CODEC_TEXT );
     fmt.i_sar_num = 0;
     fmt.i_sar_den = 1;
     fmt.i_width = fmt.i_height = 0;
     fmt.i_x_offset = fmt.i_y_offset = 0;
     p_spu->p_region = subpicture_region_New( &fmt );
+    video_format_Clean( &fmt );
     if( !p_spu->p_region )
     {
         msg_Err( p_dec, "cannot allocate SPU region" );
-        decoder_DeleteSubpicture( p_dec, p_spu );
+        if( p_bitmap_region )
+            subpicture_region_Delete( p_bitmap_region );
+        subpicture_Delete( p_spu );
         return NULL;
     }
 
@@ -1337,9 +1248,11 @@ static void ParseKateComments( decoder_t *p_dec )
     char *psz_name, *psz_value, *psz_comment;
     int i = 0;
 
-    while ( i < p_dec->p_sys->kc.comments )
+    decoder_sys_t *p_sys = p_dec->p_sys;
+
+    while ( i < p_sys->kc.comments )
     {
-        psz_comment = strdup( p_dec->p_sys->kc.user_comments[i] );
+        psz_comment = strdup( p_sys->kc.user_comments[i] );
         if( !psz_comment )
             break;
         psz_name = psz_comment;

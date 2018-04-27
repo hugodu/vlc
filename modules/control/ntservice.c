@@ -28,6 +28,7 @@
 # include "config.h"
 #endif
 
+#define VLC_MODULE_LICENSE VLC_LICENSE_GPL_2_PLUS
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_interface.h>
@@ -169,7 +170,7 @@ static void *Run( void *data )
     free( p_intf->p_sys->psz_service );
 
     /* Make sure we exit (In case other interfaces have been spawned) */
-    libvlc_Quit( p_intf->p_libvlc );
+    libvlc_Quit( p_intf->obj.libvlc );
     return NULL;
 }
 
@@ -193,23 +194,23 @@ static int NTServiceInstall( intf_thread_t *p_intf )
     /* Find out the filename of ourselves so we can install it to the
      * service control manager */
     GetModuleFileName( NULL, psz_pathtmp, MAX_PATH );
-    sprintf( psz_path, "\"%s\" -I "MODULE_STRING, FromT(psz_pathtmp) );
+    sprintf( psz_path, "\"%s\" -I ntservice", FromT(psz_pathtmp) );
 
     psz_extra = var_InheritString( p_intf, "ntservice-extraintf" );
-    if( psz_extra )
+    if( psz_extra && *psz_extra )
     {
         strcat( psz_path, " --ntservice-extraintf " );
-        strcat( psz_path, psz_extra );
-        free( psz_extra );
+        strncat( psz_path, psz_extra, MAX_PATH - strlen( psz_path ) - 1 );
     }
+    free( psz_extra );
 
     psz_extra = var_InheritString( p_intf, "ntservice-options" );
     if( psz_extra && *psz_extra )
     {
         strcat( psz_path, " " );
-        strcat( psz_path, psz_extra );
-        free( psz_extra );
+        strncat( psz_path, psz_extra, MAX_PATH - strlen( psz_path ) - 1 );
     }
+    free( psz_extra );
 
     SC_HANDLE service =
         CreateServiceA( handle, p_sys->psz_service, p_sys->psz_service,
@@ -322,7 +323,7 @@ static void WINAPI ServiceDispatch( DWORD numArgs, char **args )
         if( asprintf( &psz_temp, "%s,none", psz_module ) != -1 )
         {
             /* Try to create the interface */
-            if( intf_Create( p_intf, psz_temp ) )
+            if( intf_Create( pl_Get(p_intf), psz_temp ) )
             {
                 msg_Err( p_intf, "interface \"%s\" initialization failed",
                          psz_temp );

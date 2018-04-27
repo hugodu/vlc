@@ -1,27 +1,27 @@
-# sparkle
+# Sparkle
 
-#SPARKLE_VERSION := 1.5b6
-#SPARKLE_URL := http://sparkle.andymatuschak.org/files/Sparkle%20$(SPARKLE_VERSION).zip
-SPARKLE_GITURL := git://github.com/andymatuschak/Sparkle.git
+SPARKLE_VERSION := 1.16.0
+SPARKLE_URL := https://github.com/sparkle-project/Sparkle/archive/$(SPARKLE_VERSION).zip
 
 ifdef HAVE_MACOSX
 PKGS += sparkle
 endif
 
-$(TARBALLS)/sparkle-git.tar.xz:
-	$(call download_git,$(SPARKLE_GITURL),,HEAD)
+$(TARBALLS)/Sparkle-$(SPARKLE_VERSION).zip:
+	$(call download_pkg,$(SPARKLE_URL),sparkle)
 
-.sum-sparkle: sparkle-git.tar.xz
-	$(warning $@ not implemented)
-	touch $@
+.sum-sparkle: Sparkle-$(SPARKLE_VERSION).zip
 
-sparkle: sparkle-git.tar.xz .sum-sparkle
+sparkle: Sparkle-$(SPARKLE_VERSION).zip .sum-sparkle
 	$(UNPACK)
-	$(APPLY) $(SRC)/sparkle/sparkle-fix-formatstring.patch
 	$(MOVE)
 
 .sparkle: sparkle
+	# Build Sparkle and change the @rpath
 	cd $< && xcodebuild $(XCODE_FLAGS)
 	cd $< && install_name_tool -id @executable_path/../Frameworks/Sparkle.framework/Versions/A/Sparkle build/Release/Sparkle.framework/Sparkle
-	cd $< && cp -R build/Release/Sparkle.framework "$(PREFIX)"
+	# Install
+	cd $< && mkdir -p "$(PREFIX)/Frameworks" && \
+		rm -Rf "$(PREFIX)/Frameworks/Sparkle.framework" && \
+		cp -R build/Release/Sparkle.framework "$(PREFIX)/Frameworks"
 	touch $@

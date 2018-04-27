@@ -31,12 +31,12 @@
 #endif
 
 #include <limits.h>
+#include <errno.h>
 
 #include <vlc_common.h>
 #include <vlc_plugin.h>
-#include <vlc_block.h>
-
 #include <vlc_filter.h>
+#include <vlc_picture.h>
 #include "filter_picture.h"
 #include <vlc_image.h>
 #include <vlc_strings.h>
@@ -97,7 +97,7 @@ vlc_module_begin ()
     set_help(SCENE_HELP)
     set_category( CAT_VIDEO )
     set_subcategory( SUBCAT_VIDEO_VFILTER )
-    set_capability( "video filter2", 0 )
+    set_capability( "video filter", 0 )
 
     /* General options */
     add_string(  CFG_PREFIX "format", "png",
@@ -209,7 +209,7 @@ static int Create( vlc_object_t *p_this )
 static void Destroy( vlc_object_t *p_this )
 {
     filter_t *p_filter = (filter_t *)p_this;
-    filter_sys_t *p_sys = (filter_sys_t *) p_filter->p_sys;
+    filter_sys_t *p_sys = p_filter->p_sys;
 
     image_HandlerDelete( p_sys->p_image );
 
@@ -280,7 +280,6 @@ static void SavePicture( filter_t *p_filter, picture_t *p_pic )
     char *psz_temp = NULL;
     int i_ret;
 
-    memset( &fmt_in, 0, sizeof(video_format_t) );
     memset( &fmt_out, 0, sizeof(video_format_t) );
 
     /* Save snapshot psz_format to a memory zone */
@@ -308,7 +307,6 @@ static void SavePicture( filter_t *p_filter, picture_t *p_pic )
         msg_Err( p_filter, "could not create snapshot %s", psz_filename );
         goto error;
     }
-    path_sanitize( psz_filename );
 
     i_ret = asprintf( &psz_temp, "%s.swp", psz_filename );
     if( i_ret == -1 )
@@ -316,7 +314,6 @@ static void SavePicture( filter_t *p_filter, picture_t *p_pic )
         msg_Err( p_filter, "could not create snapshot temporarily file %s", psz_temp );
         goto error;
     }
-    path_sanitize( psz_temp );
 
     /* Save the image */
     i_ret = image_WriteUrl( p_sys->p_image, p_pic, &fmt_in, &fmt_out,
@@ -334,7 +331,8 @@ static void SavePicture( filter_t *p_filter, picture_t *p_pic )
         i_ret = vlc_rename( psz_temp, psz_filename );
         if( i_ret == -1 )
         {
-            msg_Err( p_filter, "could not rename snapshot %s %m", psz_filename );
+            msg_Err( p_filter, "could not rename snapshot %s: %s",
+                     psz_filename, vlc_strerror_c(errno) );
             goto error;
         }
     }

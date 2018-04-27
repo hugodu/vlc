@@ -32,7 +32,7 @@
 #include "x11_display.hpp"
 #include "../src/logger.hpp"
 
-#include "../../../share/icons/32x32/vlc.xpm"
+#include "../share/icons/32x32/vlc.xpm"
 
 template<class type> type X11Display::putPixel(type r, type g, type b) const
 {
@@ -330,6 +330,9 @@ void X11Display::testEWMH()
         msg_Dbg( getIntf(), "%s support: yes", value );\
 }
 
+    TEST_EWMH( m_net_wm_window_type, "_NET_WM_WINDOW_TYPE" )
+    TEST_EWMH( m_net_wm_window_type_normal, "_NET_WM_WINDOW_TYPE_NORMAL" )
+
     TEST_EWMH( m_net_wm_state, "_NET_WM_STATE" )
     TEST_EWMH( m_net_wm_state_fullscreen, "_NET_WM_STATE_FULLSCREEN" )
     TEST_EWMH( m_net_wm_stays_on_top, "_NET_WM_STATE_STAYS_ON_TOP" )
@@ -338,6 +341,7 @@ void X11Display::testEWMH()
     TEST_EWMH( m_net_wm_window_opacity, "_NET_WM_WINDOW_OPACITY" )
 
     TEST_EWMH( m_net_wm_pid, "_NET_WM_PID" )
+    TEST_EWMH( m_net_workarea, "_NET_WORKAREA" )
 
 #undef TEST_EWMH
 

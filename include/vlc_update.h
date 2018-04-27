@@ -26,17 +26,13 @@
 #define VLC_UPDATE_H
 
 /**
- * \file
- * This file defines update API in vlc
- */
-
-/**
- * \defgroup update Update
- *
+ * \defgroup update Software updates
+ * \ingroup interface
+ * Over-the-air VLC software updates
  * @{
+ * \file
+ *VLC software update interface
  */
-
-#ifdef UPDATE_CHECK
 
 /**
  * Describes an update VLC release number
@@ -50,8 +46,6 @@ struct update_release_t
     char* psz_url;      ///< Download URL
     char* psz_desc;     ///< Release description
 };
-
-#endif /* UPDATE_CHECK */
 
 typedef struct update_release_t update_release_t;
 

@@ -34,19 +34,15 @@
 
 #include <vlc_common.h>
 #include <vlc_meta.h>
-
+#include <vlc_url.h>
 #include <vlc_playlist.h>
 
 #include <assert.h>
 
 #include "../vlc.h"
 #include "input.h"
-#include "playlist.h"
 #include "../libs.h"
 #include "../extension.h"
-
-static const luaL_Reg vlclua_input_reg[];
-static const luaL_Reg vlclua_input_item_reg[];
 
 static input_item_t* vlclua_input_item_get_internal( lua_State *L );
 
@@ -62,9 +58,16 @@ input_thread_t * vlclua_get_input_internal( lua_State *L )
             return p_input;
         }
     }
+
     playlist_t *p_playlist = vlclua_get_playlist_internal( L );
-    input_thread_t *p_input = playlist_CurrentInput( p_playlist );
-    return p_input;
+    if( p_playlist != NULL )
+    {
+        input_thread_t *p_input = playlist_CurrentInput( p_playlist );
+        if( p_input )
+            return p_input;
+    }
+
+    return NULL;
 }
 
 static int vlclua_input_item_info( lua_State *L )
@@ -111,13 +114,28 @@ static int vlclua_input_metas_internal( lua_State *L, input_item_t *p_item )
     }
 
     lua_newtable( L );
-    char *psz_name;
     const char *psz_meta;
 
-    psz_name = input_item_GetName( p_item );
-    lua_pushstring( L, psz_name );
+    char* psz_uri = input_item_GetURI( p_item );
+    char* psz_filename = psz_uri ? strrchr( psz_uri, '/' ) : NULL;
+
+    if( psz_filename && psz_filename[1] == '\0' )
+    {
+        /* trailing slash, get the preceeding data */
+        psz_filename[0] = '\0';
+        psz_filename = strrchr( psz_uri, '/' );
+    }
+
+    if( psz_filename )
+    {
+        /* url decode, without leading slash */
+        psz_filename = vlc_uri_decode( psz_filename + 1 );
+    }
+
+    lua_pushstring( L, psz_filename );
     lua_setfield( L, -2, "filename" );
-    free( psz_name );
+
+    free( psz_uri );
 
 #define PUSH_META( n, m ) \
     psz_meta = vlc_meta_Get( p_item->p_meta, vlc_meta_ ## n ); \
@@ -146,6 +164,11 @@ static int vlclua_input_metas_internal( lua_State *L, input_item_t *p_item )
         PUSH_META( ArtworkURL, "artwork_url" );
         PUSH_META( TrackID, "track_id" );
         PUSH_META( TrackTotal, "track_total" );
+        PUSH_META( Director, "director" );
+        PUSH_META( Season, "season" );
+        PUSH_META( Episode, "episode" );
+        PUSH_META( ShowName, "show_name" );
+        PUSH_META( Actors, "actors" );
 
 #undef PUSH_META
 
@@ -168,9 +191,13 @@ static int vlclua_input_item_stats( lua_State *L )
 {
     input_item_t *p_item = vlclua_input_item_get_internal( L );
     lua_newtable( L );
-    if( p_item )
+    if( p_item == NULL )
+        return 1;
+
+    vlc_mutex_lock( &p_item->lock );
+    input_stats_t *p_stats = p_item->p_stats;
+    if( p_stats != NULL )
     {
-        vlc_mutex_lock( &p_item->p_stats->lock );
 #define STATS_INT( n ) lua_pushinteger( L, p_item->p_stats->i_ ## n ); \
                        lua_setfield( L, -2, #n );
 #define STATS_FLOAT( n ) lua_pushnumber( L, p_item->p_stats->f_ ## n ); \
@@ -178,40 +205,61 @@ static int vlclua_input_item_stats( lua_State *L )
         STATS_INT( read_packets )
         STATS_INT( read_bytes )
         STATS_FLOAT( input_bitrate )
-        STATS_FLOAT( average_input_bitrate )
         STATS_INT( demux_read_packets )
         STATS_INT( demux_read_bytes )
         STATS_FLOAT( demux_bitrate )
-        STATS_FLOAT( average_demux_bitrate )
         STATS_INT( demux_corrupted )
         STATS_INT( demux_discontinuity )
         STATS_INT( decoded_audio )
         STATS_INT( decoded_video )
         STATS_INT( displayed_pictures )
         STATS_INT( lost_pictures )
-        STATS_INT( sent_packets )
-        STATS_INT( sent_bytes )
-        STATS_FLOAT( send_bitrate )
         STATS_INT( played_abuffers )
         STATS_INT( lost_abuffers )
 #undef STATS_INT
 #undef STATS_FLOAT
-        vlc_mutex_unlock( &p_item->p_stats->lock );
     }
+    vlc_mutex_unlock( &p_item->lock );
     return 1;
 }
 
-static int vlclua_input_add_subtitle( lua_State *L )
+static int vlclua_input_add_subtitle( lua_State *L, bool b_path )
 {
     input_thread_t *p_input = vlclua_get_input_internal( L );
+    bool b_autoselect = false;
     if( !p_input )
         return luaL_error( L, "can't add subtitle: no current input" );
     if( !lua_isstring( L, 1 ) )
-        return luaL_error( L, "vlc.input.add_subtitle() usage: (url)" );
-    const char *psz_url = luaL_checkstring( L, 1 );
-    input_AddSubtitle( p_input, psz_url, false );
+    {
+        vlc_object_release( p_input );
+        return luaL_error( L, "vlc.input.add_subtitle() usage: (path)" );
+    }
+    if( lua_gettop( L ) >= 2 )
+        b_autoselect = lua_toboolean( L, 2 );
+    const char *psz_sub = luaL_checkstring( L, 1 );
+    if( !b_path )
+        input_AddSlave( p_input, SLAVE_TYPE_SPU, psz_sub, b_autoselect, true, false );
+    else
+    {
+        char* psz_mrl = vlc_path2uri( psz_sub, NULL );
+        if ( psz_mrl )
+        {
+            input_AddSlave( p_input, SLAVE_TYPE_SPU, psz_mrl, b_autoselect, true, false );
+            free( psz_mrl );
+        }
+    }
     vlc_object_release( p_input );
     return 1;
+}
+
+static int vlclua_input_add_subtitle_path( lua_State *L )
+{
+    return vlclua_input_add_subtitle( L, true );
+}
+
+static int vlclua_input_add_subtitle_mrl( lua_State *L )
+{
+    return vlclua_input_add_subtitle( L, false );
 }
 
 /*****************************************************************************
@@ -239,27 +287,7 @@ static int vlclua_input_item_delete( lua_State *L )
         return luaL_error( L, "script went completely foobar" );
 
     *pp_item = NULL;
-    vlc_gc_decref( p_item );
-
-    return 1;
-}
-
-static int vlclua_input_item_get( lua_State *L, input_item_t *p_item )
-{
-    vlc_gc_incref( p_item );
-    input_item_t **pp = lua_newuserdata( L, sizeof( input_item_t* ) );
-    *pp = p_item;
-
-    if( luaL_newmetatable( L, "input_item" ) )
-    {
-        lua_newtable( L );
-        luaL_register( L, NULL, vlclua_input_item_reg );
-        lua_setfield( L, -2, "__index" );
-        lua_pushcfunction( L, vlclua_input_item_delete );
-        lua_setfield( L, -2, "__gc" );
-    }
-
-    lua_setmetatable(L, -2);
+    input_item_Release( p_item );
 
     return 1;
 }
@@ -267,7 +295,7 @@ static int vlclua_input_item_get( lua_State *L, input_item_t *p_item )
 static int vlclua_input_item_get_current( lua_State *L )
 {
     input_thread_t *p_input = vlclua_get_input_internal( L );
-    input_item_t *p_item = ( p_input && p_input->p ) ? input_GetItem( p_input ) : NULL;
+    input_item_t *p_item = p_input ? input_GetItem( p_input ) : NULL;
     if( !p_item )
     {
         lua_pushnil( L );
@@ -295,13 +323,17 @@ static int vlclua_input_item_is_preparsed( lua_State *L )
 
 static int vlclua_input_item_uri( lua_State *L )
 {
-    lua_pushstring( L, input_item_GetURI( vlclua_input_item_get_internal( L ) ) );
+    char *uri = input_item_GetURI( vlclua_input_item_get_internal( L ) );
+    lua_pushstring( L, uri );
+    free( uri );
     return 1;
 }
 
 static int vlclua_input_item_name( lua_State *L )
 {
-    lua_pushstring( L, input_item_GetName( vlclua_input_item_get_internal( L ) ) );
+    char *name = input_item_GetName( vlclua_input_item_get_internal( L ) );
+    lua_pushstring( L, name );
+    free( name );
     return 1;
 }
 
@@ -338,11 +370,20 @@ static int vlclua_input_item_set_meta( lua_State *L )
         META_TYPE( URL, "url" )
         META_TYPE( Language, "language" )
         META_TYPE( NowPlaying, "now_playing" )
+        META_TYPE( ESNowPlaying, "now_playing" )
         META_TYPE( Publisher, "publisher" )
         META_TYPE( EncodedBy, "encoded_by" )
         META_TYPE( ArtworkURL, "artwork_url" )
         META_TYPE( TrackID, "track_id" )
         META_TYPE( TrackTotal, "track_total" )
+        META_TYPE( Director, "director" )
+        META_TYPE( Season, "season" )
+        META_TYPE( Episode, "episode" )
+        META_TYPE( ShowName, "show_name" )
+        META_TYPE( Actors, "actors" )
+        META_TYPE( AlbumArtist, "album_artist" )
+        META_TYPE( DiscNumber, "disc_number" )
+        META_TYPE( DiscTotal, "disc_total" )
     };
 #undef META_TYPE
 
@@ -370,7 +411,8 @@ static int vlclua_input_item_set_meta( lua_State *L )
 static const luaL_Reg vlclua_input_reg[] = {
     { "is_playing", vlclua_input_is_playing },
     { "item", vlclua_input_item_get_current },
-    { "add_subtitle", vlclua_input_add_subtitle },
+    { "add_subtitle", vlclua_input_add_subtitle_path },
+    { "add_subtitle_mrl", vlclua_input_add_subtitle_mrl },
     { NULL, NULL }
 };
 
@@ -392,6 +434,26 @@ static const luaL_Reg vlclua_input_item_reg[] = {
     { "info", vlclua_input_item_info },
     { NULL, NULL }
 };
+
+int vlclua_input_item_get( lua_State *L, input_item_t *p_item )
+{
+    input_item_Hold( p_item );
+    input_item_t **pp = lua_newuserdata( L, sizeof( input_item_t* ) );
+    *pp = p_item;
+
+    if( luaL_newmetatable( L, "input_item" ) )
+    {
+        lua_newtable( L );
+        luaL_register( L, NULL, vlclua_input_item_reg );
+        lua_setfield( L, -2, "__index" );
+        lua_pushcfunction( L, vlclua_input_item_delete );
+        lua_setfield( L, -2, "__gc" );
+    }
+
+    lua_setmetatable(L, -2);
+
+    return 1;
+}
 
 
 void luaopen_input_item( lua_State *L, input_item_t *item )

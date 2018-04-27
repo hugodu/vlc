@@ -1,7 +1,7 @@
 /*****************************************************************************
  * autodel.c: monitor mux inputs and automatically add/delete streams
  *****************************************************************************
- * Copyright (C) 2006 the VideoLAN team
+ * Copyright (C) 2006 VLC authors and VideoLAN
  * $Id$
  *
  * Authors: Christophe Massiot <massiot@via.ecp.fr>
@@ -54,13 +54,13 @@ vlc_module_end ()
 /*****************************************************************************
  * Local prototypes
  *****************************************************************************/
-static sout_stream_id_t *Add   ( sout_stream_t *, es_format_t * );
-static int               Del   ( sout_stream_t *, sout_stream_id_t * );
-static int               Send  ( sout_stream_t *, sout_stream_id_t *, block_t * );
+static sout_stream_id_sys_t *Add( sout_stream_t *, const es_format_t * );
+static void              Del   ( sout_stream_t *, sout_stream_id_sys_t * );
+static int               Send  ( sout_stream_t *, sout_stream_id_sys_t *, block_t * );
 
-struct sout_stream_id_t
+struct sout_stream_id_sys_t
 {
-    sout_stream_id_t *id;
+    sout_stream_id_sys_t *id;
     es_format_t fmt;
     mtime_t i_last;
     bool b_error;
@@ -68,7 +68,7 @@ struct sout_stream_id_t
 
 struct sout_stream_sys_t
 {
-    sout_stream_id_t **pp_es;
+    sout_stream_id_sys_t **pp_es;
     int i_es_num;
 };
 
@@ -111,12 +111,16 @@ static void Close( vlc_object_t * p_this )
     free( p_sys );
 }
 
-static sout_stream_id_t * Add( sout_stream_t *p_stream, es_format_t *p_fmt )
+static sout_stream_id_sys_t * Add( sout_stream_t *p_stream,
+                                   const es_format_t *p_fmt )
 {
     sout_stream_sys_t *p_sys = (sout_stream_sys_t *)p_stream->p_sys;
-    sout_stream_id_t *p_es = malloc( sizeof(sout_stream_id_t) );
+    sout_stream_id_sys_t *p_es = malloc( sizeof(sout_stream_id_sys_t) );
+    if( unlikely(p_es == NULL) )
+        return NULL;
 
-    p_es->fmt = *p_fmt;
+    es_format_Copy( &p_es->fmt, p_fmt );
+
     p_es->id = NULL;
     p_es->i_last = VLC_TS_INVALID;
     p_es->b_error = false;
@@ -125,21 +129,19 @@ static sout_stream_id_t * Add( sout_stream_t *p_stream, es_format_t *p_fmt )
     return p_es;
 }
 
-static int Del( sout_stream_t *p_stream, sout_stream_id_t *p_es )
+static void Del( sout_stream_t *p_stream, sout_stream_id_sys_t *p_es )
 {
     sout_stream_sys_t *p_sys = (sout_stream_sys_t *)p_stream->p_sys;
-    sout_stream_id_t *id = p_es->id;
+
+    if( p_es->id != NULL )
+        sout_StreamIdDel( p_stream->p_next, p_es->id );
 
     TAB_REMOVE( p_sys->i_es_num, p_sys->pp_es, p_es );
+    es_format_Clean( &p_es->fmt );
     free( p_es );
-
-    if ( id != NULL )
-        return p_stream->p_next->pf_del( p_stream->p_next, id );
-    else
-        return VLC_SUCCESS;
 }
 
-static int Send( sout_stream_t *p_stream, sout_stream_id_t *p_es,
+static int Send( sout_stream_t *p_stream, sout_stream_id_sys_t *p_es,
                  block_t *p_buffer )
 {
     sout_stream_sys_t *p_sys = (sout_stream_sys_t *)p_stream->p_sys;
@@ -149,7 +151,7 @@ static int Send( sout_stream_t *p_stream, sout_stream_id_t *p_es,
     p_es->i_last = p_buffer->i_dts;
     if ( !p_es->id && !p_es->b_error )
     {
-        p_es->id = p_stream->p_next->pf_add( p_stream->p_next, &p_es->fmt );
+        p_es->id = sout_StreamIdAdd( p_stream->p_next, &p_es->fmt );
         if ( p_es->id == NULL )
         {
             p_es->b_error = true;
@@ -159,7 +161,7 @@ static int Send( sout_stream_t *p_stream, sout_stream_id_t *p_es,
     }
 
     if ( !p_es->b_error )
-        p_stream->p_next->pf_send( p_stream->p_next, p_es->id, p_buffer );
+        sout_StreamIdSend( p_stream->p_next, p_es->id, p_buffer );
     else
         block_ChainRelease( p_buffer );
 
@@ -170,7 +172,7 @@ static int Send( sout_stream_t *p_stream, sout_stream_id_t *p_es,
                    || p_sys->pp_es[i]->fmt.i_cat == AUDIO_ES)
               && p_sys->pp_es[i]->i_last < i_current )
         {
-            p_stream->p_next->pf_del( p_stream->p_next, p_sys->pp_es[i]->id );
+            sout_StreamIdDel( p_stream->p_next, p_sys->pp_es[i]->id );
             p_sys->pp_es[i]->id = NULL;
         }
     }

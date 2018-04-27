@@ -35,11 +35,11 @@ extern "C" {
 
 struct xml_t
 {
-    VLC_COMMON_MEMBERS
+    struct vlc_common_members obj;
 
     /* Module properties */
     module_t  *p_module;
-    xml_sys_t *p_sys;
+    void      *p_sys;
 
     void (*pf_catalog_load) ( xml_t *, const char * );
     void (*pf_catalog_add) ( xml_t *, const char *, const char *,
@@ -64,9 +64,9 @@ static inline void xml_CatalogAdd( xml_t *xml, const char *type,
 
 struct xml_reader_t
 {
-    VLC_COMMON_MEMBERS
+    struct vlc_common_members obj;
 
-    xml_reader_sys_t *p_sys;
+    void     *p_sys;
     stream_t *p_stream;
     module_t *p_module;
 
@@ -80,7 +80,6 @@ struct xml_reader_t
 VLC_API xml_reader_t * xml_ReaderCreate(vlc_object_t *, stream_t *) VLC_USED;
 #define xml_ReaderCreate( a, s ) xml_ReaderCreate(VLC_OBJECT(a), s)
 VLC_API void xml_ReaderDelete(xml_reader_t *);
-VLC_API xml_reader_t * xml_ReaderReset(xml_reader_t *, stream_t *) VLC_USED;
 
 static inline int xml_ReaderNextNode( xml_reader_t *reader, const char **pval )
 {
@@ -107,6 +106,7 @@ static inline int xml_ReaderIsEmptyElement( xml_reader_t *reader )
 }
 
 enum {
+    XML_READER_ERROR=-1,
     XML_READER_NONE=0,
     XML_READER_STARTELEM,
     XML_READER_ENDELEM,

@@ -12,7 +12,7 @@ PKGS_FOUND += cddb
 endif
 
 $(TARBALLS)/libcddb-$(CDDB_VERSION).tar.bz2:
-	$(call download,$(CDDB_URL))
+	$(call download_pkg,$(CDDB_URL),cddb)
 
 .sum-cddb: libcddb-$(CDDB_VERSION).tar.bz2
 
@@ -21,12 +21,13 @@ cddb: libcddb-$(CDDB_VERSION).tar.bz2 .sum-cddb
 	$(APPLY) $(SRC)/cddb/cross.patch
 	$(APPLY) $(SRC)/cddb/getenv-crash.patch
 	$(APPLY) $(SRC)/cddb/cddb-no-alarm.patch
+	$(APPLY) $(SRC)/cddb/fix-header-guards.patch
 ifdef HAVE_WIN32
 	$(APPLY) $(SRC)/cddb/win32-pkg.patch
 endif
 	$(MOVE)
 
-DEPS_cddb = regex $(DEPS_regex)
+DEPS_cddb = regex $(DEPS_regex) gettext $(DEPS_gettext)
 
 .cddb: cddb
 	$(RECONF)

@@ -23,7 +23,7 @@
 
 #ifndef LIBVLC_VOUT_STATISTIC_H
 # define LIBVLC_VOUT_STATISTIC_H
-# include <vlc_atomic.h>
+# include <stdatomic.h>
 
 /* NOTE: Both statistics are atomic on their own, so one might be older than
  * the other one. Currently, only one of them is updated at a time, so this
@@ -44,7 +44,9 @@ static inline void vout_statistic_Clean(vout_statistic_t *stat)
     (void) stat;
 }
 
-static inline void vout_statistic_GetReset(vout_statistic_t *stat, int *displayed, int *lost)
+static inline void vout_statistic_GetReset(vout_statistic_t *stat,
+                                           unsigned *restrict displayed,
+                                           unsigned *restrict lost)
 {
     *displayed = atomic_exchange(&stat->displayed, 0);
     *lost      = atomic_exchange(&stat->lost, 0);

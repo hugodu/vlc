@@ -36,40 +36,7 @@
 #include <vlc_common.h>
 #include <assert.h>
 
-#ifdef HAVE_UNISTD_H
-# include <unistd.h>
-#endif
-#if !defined (_POSIX_TIMERS) || defined (_WIN32)
-# define _POSIX_TIMERS (-1)
-#endif
-#if (_POSIX_TIMERS > 0)
-# include <time.h> /* clock_gettime() */
-#else
-# include <sys/time.h>
-#endif
-
-/**
- * Return a date in a readable format
- *
- * This function converts a mtime date into a string.
- * psz_buffer should be a buffer long enough to store the formatted
- * date.
- * \param date to be converted
- * \param psz_buffer should be a buffer at least MSTRTIME_MAX_SIZE characters
- * \return psz_buffer is returned so this can be used as printf parameter.
- */
-char *mstrtime( char *psz_buffer, mtime_t date )
-{
-    static const mtime_t ll1000 = 1000, ll60 = 60, ll24 = 24;
-
-    snprintf( psz_buffer, MSTRTIME_MAX_SIZE, "%02d:%02d:%02d-%03d.%03d",
-             (int) (date / (ll1000 * ll1000 * ll60 * ll60) % ll24),
-             (int) (date / (ll1000 * ll1000 * ll60) % ll60),
-             (int) (date / (ll1000 * ll1000) % ll60),
-             (int) (date / ll1000 % ll1000),
-             (int) (date % ll1000) );
-    return( psz_buffer );
-}
+#include <time.h>
 
 /**
  * Convert seconds to a time in the format h:mm:ss.
@@ -185,6 +152,7 @@ void date_Move( date_t *p_date, mtime_t i_difference )
  */
 mtime_t date_Increment( date_t *p_date, uint32_t i_nb_samples )
 {
+    assert( p_date->i_divider_num != 0 );
     mtime_t i_dividend = i_nb_samples * CLOCK_FREQ * p_date->i_divider_den;
     lldiv_t d = lldiv( i_dividend, p_date->i_divider_num );
 
@@ -212,14 +180,14 @@ mtime_t date_Increment( date_t *p_date, uint32_t i_nb_samples )
  */
 mtime_t date_Decrement( date_t *p_date, uint32_t i_nb_samples )
 {
-    mtime_t i_dividend = (mtime_t)i_nb_samples * 1000000 * p_date->i_divider_den;
+    mtime_t i_dividend = (mtime_t)i_nb_samples * CLOCK_FREQ * p_date->i_divider_den;
     p_date->date -= i_dividend / p_date->i_divider_num;
     unsigned i_rem_adjust = i_dividend % p_date->i_divider_num;
 
     if( p_date->i_remainder < i_rem_adjust )
     {
         /* This is Bresenham algorithm. */
-        assert( p_date->i_remainder > -p_date->i_divider_num);
+        assert( p_date->i_remainder < p_date->i_divider_num);
         p_date->date -= 1;
         p_date->i_remainder += p_date->i_divider_num;
     }
@@ -232,35 +200,19 @@ mtime_t date_Decrement( date_t *p_date, uint32_t i_nb_samples )
 /**
  * @return NTP 64-bits timestamp in host byte order.
  */
-uint64_t NTPtime64 (void)
+uint64_t NTPtime64(void)
 {
-#if (_POSIX_TIMERS > 0)
     struct timespec ts;
 
-    clock_gettime (CLOCK_REALTIME, &ts);
-#else
-    struct timeval tv;
-    struct
-    {
-        uint32_t tv_sec;
-        uint32_t tv_nsec;
-    } ts;
-
-    gettimeofday (&tv, NULL);
-    ts.tv_sec = tv.tv_sec;
-    ts.tv_nsec = tv.tv_usec * 1000;
-#endif
+    timespec_get(&ts, TIME_UTC);
 
     /* Convert nanoseconds to 32-bits fraction (232 picosecond units) */
     uint64_t t = (uint64_t)(ts.tv_nsec) << 32;
     t /= 1000000000;
 
-
-    /* There is 70 years (incl. 17 leap ones) offset to the Unix Epoch.
-     * No leap seconds during that period since they were not invented yet.
+    /* The offset to Unix epoch is 70 years (incl. 17 leap ones). There were
+     * no leap seconds during that period since they had not been invented yet.
      */
-    assert (t < 0x100000000);
-    t |= ((70LL * 365 + 17) * 24 * 60 * 60 + ts.tv_sec) << 32;
+    t |= ((UINT64_C(70) * 365 + 17) * 24 * 60 * 60 + ts.tv_sec) << 32;
     return t;
 }
-

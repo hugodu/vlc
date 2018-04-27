@@ -33,19 +33,17 @@
 #include <vlc_plugin.h>
 
 #include <sys/types.h>
+#include <unistd.h>
 #include <assert.h>
+#include <errno.h>
 
 #include <vlc_sout.h>
 #include <vlc_block.h>
 
-#ifdef HAVE_UNISTD_H
-#   include <unistd.h>
-#endif
-
 #ifdef _WIN32
 #   include <winsock2.h>
 #   include <ws2tcpip.h>
-#else
+#elif defined (HAVE_SYS_SOCKET_H)
 #   include <sys/socket.h>
 #endif
 
@@ -106,7 +104,6 @@ static const char *const ppsz_core_options[] = {
 };
 
 static ssize_t Write   ( sout_access_out_t *, block_t * );
-static int  Seek    ( sout_access_out_t *, off_t  );
 static int Control( sout_access_out_t *, int, va_list );
 
 static void* ThreadWrite( void * );
@@ -228,7 +225,6 @@ static int Open( vlc_object_t *p_this )
     }
 
     p_access->pf_write = Write;
-    p_access->pf_seek = Seek;
     p_access->pf_control = Control;
 
     return VLC_SUCCESS;
@@ -354,16 +350,6 @@ static ssize_t Write( sout_access_out_t *p_access, block_t *p_buffer )
 }
 
 /*****************************************************************************
- * Seek: seek to a specific location in a file
- *****************************************************************************/
-static int Seek( sout_access_out_t *p_access, off_t i_pos )
-{
-    (void) i_pos;
-    msg_Err( p_access, "UDP sout access cannot seek" );
-    return -1;
-}
-
-/*****************************************************************************
  * NewUDPPacket: allocate a new UDP packet of size p_sys->i_mtu
  *****************************************************************************/
 static block_t *NewUDPPacket( sout_access_out_t *p_access, mtime_t i_dts)
@@ -443,7 +429,7 @@ static void* ThreadWrite( void *data )
             i_to_send = i_group;
         }
         if ( send( p_sys->i_handle, p_pk->p_buffer, p_pk->i_buffer, 0 ) == -1 )
-            msg_Warn( p_access, "send error: %m" );
+            msg_Warn( p_access, "send error: %s", vlc_strerror_c(errno) );
         vlc_cleanup_pop();
 
         if( i_dropped_packets )

@@ -22,10 +22,13 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 
-#ifndef _CHAPTER_COMMAND_H_
-#define _CHAPTER_COMMAND_H_
+#ifndef VLC_MKV_CHAPTER_COMMAND_HPP_
+#define VLC_MKV_CHAPTER_COMMAND_HPP_
 
 #include "mkv.hpp"
+
+const int MATROSKA_CHAPTER_CODEC_NATIVE  = 0x00;
+const int MATROSKA_CHAPTER_CODEC_DVD     = 0x01;
 
 const binary MATROSKA_DVD_LEVEL_SS   = 0x30;
 const binary MATROSKA_DVD_LEVEL_LU   = 0x2A;
@@ -35,7 +38,7 @@ const binary MATROSKA_DVD_LEVEL_PG   = 0x18;
 const binary MATROSKA_DVD_LEVEL_PTT  = 0x10;
 const binary MATROSKA_DVD_LEVEL_CN   = 0x08;
 
-class demux_sys_t;
+struct demux_sys_t;
 
 class chapter_codec_cmds_c
 {
@@ -253,8 +256,12 @@ public:
 
     bool Enter();
     bool Leave();
+
     std::string GetCodecName( bool f_for_title = false ) const;
     int16 GetTitleNumber();
+
+protected:
+    bool EnterLeaveHelper( char const*, std::vector<KaxChapterProcessData*>* );
 };
 
 class matroska_script_interpretor_c

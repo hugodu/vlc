@@ -1,5 +1,5 @@
 /*****************************************************************************
- * dbus_introspect.h : dbus control module (mpris v2.1) - introspection data
+ * dbus_introspect.h : dbus control module (mpris v2.2) - introspection data
  *****************************************************************************
  * Copyright © 2006-2011 Rafaël Carré
  * Copyright © 2007-2011 Mirsal Ennaime
@@ -26,8 +26,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 
-#ifndef _VLC_DBUS_INTROSPECT_H
-#define _VLC_DBUS_INTROSPECT_H
+#ifndef VLC_DBUS_DBUS_INTROSPECT_H_
+#define VLC_DBUS_DBUS_INTROSPECT_H_
 
 #include "dbus_common.h"
 
@@ -153,4 +153,4 @@ DBUS_METHOD( handle_introspect )
     REPLY_SEND;
 }
 
-#endif //dbus-introspect.h
+#endif /* include-guard */

@@ -73,6 +73,8 @@ static int InitVideo (demux_t *, int fd, uint32_t caps);
 int DemuxOpen( vlc_object_t *obj )
 {
     demux_t *demux = (demux_t *)obj;
+    if (demux->out == NULL)
+        return VLC_EGENERIC;
 
     demux_sys_t *sys = malloc (sizeof (*sys));
     if (unlikely(sys == NULL))
@@ -105,9 +107,6 @@ int DemuxOpen( vlc_object_t *obj )
     sys->start = mdate ();
     demux->pf_demux = NULL;
     demux->pf_control = DemuxControl;
-    demux->info.i_update = 0;
-    demux->info.i_title = 0;
-    demux->info.i_seekpoint = 0;
     return VLC_SUCCESS;
 error:
     free (sys);
@@ -351,9 +350,11 @@ static int InitVideo (demux_t *demux, int fd, uint32_t caps)
             break;
         case V4L2_FIELD_TOP:
             msg_Dbg (demux, "Interlacing setting: top field only");
+            sys->block_flags = BLOCK_FLAG_TOP_FIELD_FIRST|BLOCK_FLAG_SINGLE_FIELD;
             break;
         case V4L2_FIELD_BOTTOM:
             msg_Dbg (demux, "Interlacing setting: bottom field only");
+            sys->block_flags = BLOCK_FLAG_BOTTOM_FIELD_FIRST|BLOCK_FLAG_SINGLE_FIELD;
             break;
         case V4L2_FIELD_INTERLACED:
             msg_Dbg (demux, "Interlacing setting: interleaved");
@@ -390,6 +391,7 @@ static int InitVideo (demux_t *demux, int fd, uint32_t caps)
     es_format_t es_fmt;
 
     es_format_Init (&es_fmt, VIDEO_ES, selected->vlc);
+    es_fmt.video.i_chroma = selected->vlc;
     es_fmt.video.i_rmask = selected->red;
     es_fmt.video.i_gmask = selected->green;
     es_fmt.video.i_bmask = selected->blue;
@@ -398,12 +400,149 @@ static int InitVideo (demux_t *demux, int fd, uint32_t caps)
         es_fmt.video.i_width = fmt.fmt.pix.bytesperline / selected->bpp;
     else
         es_fmt.video.i_width = fmt.fmt.pix.width;
+    es_fmt.video.i_visible_height =
     es_fmt.video.i_height = fmt.fmt.pix.height;
     es_fmt.video.i_frame_rate = parm.parm.capture.timeperframe.denominator;
     es_fmt.video.i_frame_rate_base = parm.parm.capture.timeperframe.numerator;
     GetAR (fd, &es_fmt.video.i_sar_num, &es_fmt.video.i_sar_den);
 
-    msg_Dbg (demux, "added new video ES %4.4s %ux%u", (char *)&es_fmt.i_codec,
+    msg_Dbg (demux, "color primaries: %u", fmt.fmt.pix.colorspace);
+    switch (fmt.fmt.pix.colorspace)
+    {
+        case V4L2_COLORSPACE_DEFAULT:
+            break;
+        case V4L2_COLORSPACE_SMPTE170M:
+            es_fmt.video.primaries = COLOR_PRIMARIES_BT601_525;
+            es_fmt.video.transfer = TRANSFER_FUNC_BT709;
+            es_fmt.video.space = COLOR_SPACE_BT601;
+            break;
+        case V4L2_COLORSPACE_SMPTE240M: /* not supported */
+            break;
+        case V4L2_COLORSPACE_REC709:
+            es_fmt.video.primaries = COLOR_PRIMARIES_BT709;
+            es_fmt.video.transfer = TRANSFER_FUNC_BT709;
+            es_fmt.video.space = COLOR_SPACE_BT709;
+            break;
+        case V4L2_COLORSPACE_470_SYSTEM_M:
+            es_fmt.video.transfer = TRANSFER_FUNC_BT709;
+            es_fmt.video.space = COLOR_SPACE_BT601;
+            break;
+        case V4L2_COLORSPACE_470_SYSTEM_BG:
+            es_fmt.video.primaries = COLOR_PRIMARIES_BT601_625;
+            es_fmt.video.transfer = TRANSFER_FUNC_BT709;
+            es_fmt.video.space = COLOR_SPACE_BT601;
+            break;
+        case V4L2_COLORSPACE_JPEG:
+            es_fmt.video.primaries = COLOR_PRIMARIES_SRGB;
+            es_fmt.video.transfer = TRANSFER_FUNC_SRGB;
+            es_fmt.video.space = COLOR_SPACE_BT601;
+            es_fmt.video.b_color_range_full = true;
+            break;
+        case V4L2_COLORSPACE_SRGB:
+            es_fmt.video.primaries = COLOR_PRIMARIES_SRGB;
+            es_fmt.video.transfer = TRANSFER_FUNC_SRGB;
+            es_fmt.video.space = COLOR_SPACE_UNDEF; /* sYCC unsupported */
+            break;
+        case V4L2_COLORSPACE_ADOBERGB: /* not supported */
+            es_fmt.video.space = COLOR_SPACE_BT601;
+            break;
+        case V4L2_COLORSPACE_BT2020:
+            es_fmt.video.primaries = COLOR_PRIMARIES_BT2020;
+            es_fmt.video.transfer = TRANSFER_FUNC_BT2020;
+            es_fmt.video.space = COLOR_SPACE_BT2020;
+            break;
+        case V4L2_COLORSPACE_RAW:
+            es_fmt.video.transfer = TRANSFER_FUNC_LINEAR;
+            break;
+        case V4L2_COLORSPACE_DCI_P3:
+            es_fmt.video.primaries = COLOR_PRIMARIES_DCI_P3;
+            es_fmt.video.transfer = TRANSFER_FUNC_UNDEF;
+            es_fmt.video.space = COLOR_SPACE_BT2020;
+            break;
+        default:
+            msg_Warn (demux, "unknown color space %u", fmt.fmt.pix.colorspace);
+            break;
+    }
+
+    msg_Dbg (demux, "transfer function: %u", fmt.fmt.pix.xfer_func);
+    switch (fmt.fmt.pix.xfer_func)
+    {
+        case V4L2_XFER_FUNC_DEFAULT:
+            /* If transfer function is default, the transfer function is
+             * inferred from the colorspace value for backward compatibility.
+             * See V4L2 documentation for details. */
+            break;
+        case V4L2_XFER_FUNC_709:
+            es_fmt.video.transfer = TRANSFER_FUNC_BT709;
+            break;
+        case V4L2_XFER_FUNC_SRGB:
+            es_fmt.video.transfer = TRANSFER_FUNC_SRGB;
+            break;
+        case V4L2_XFER_FUNC_ADOBERGB:
+        case V4L2_XFER_FUNC_SMPTE240M:
+            es_fmt.video.transfer = TRANSFER_FUNC_UNDEF;
+            break;
+        case V4L2_XFER_FUNC_NONE:
+            es_fmt.video.transfer = TRANSFER_FUNC_LINEAR;
+            break;
+        case V4L2_XFER_FUNC_DCI_P3:
+        case V4L2_XFER_FUNC_SMPTE2084:
+            es_fmt.video.transfer = TRANSFER_FUNC_UNDEF;
+            break;
+        default:
+            msg_Warn (demux, "unknown transfer function %u",
+                      fmt.fmt.pix.xfer_func);
+            break;
+    }
+
+    msg_Dbg (demux, "YCbCr encoding: %u", fmt.fmt.pix.ycbcr_enc);
+    switch (fmt.fmt.pix.ycbcr_enc)
+    {
+        case V4L2_YCBCR_ENC_DEFAULT:
+            /* Same as transfer function - use color space value */
+            break;
+        case V4L2_YCBCR_ENC_601:
+            es_fmt.video.space = COLOR_SPACE_BT601;
+            break;
+        case V4L2_YCBCR_ENC_709:
+            es_fmt.video.space = COLOR_SPACE_BT709;
+            break;
+        case V4L2_YCBCR_ENC_XV601:
+        case V4L2_YCBCR_ENC_XV709:
+        case V4L2_YCBCR_ENC_SYCC:
+            break;
+        case V4L2_YCBCR_ENC_BT2020:
+            es_fmt.video.space = COLOR_SPACE_BT2020;
+            break;
+        case V4L2_YCBCR_ENC_BT2020_CONST_LUM:
+        case V4L2_YCBCR_ENC_SMPTE240M:
+            break;
+        default:
+            msg_Err (demux, "unknown YCbCr encoding: %u",
+                     fmt.fmt.pix.ycbcr_enc);
+            break;
+    }
+
+    msg_Dbg (demux, "quantization: %u", fmt.fmt.pix.quantization);
+    switch (fmt.fmt.pix.quantization)
+    {
+        case V4L2_QUANTIZATION_DEFAULT:
+            break;
+        case V4L2_QUANTIZATION_FULL_RANGE:
+            es_fmt.video.b_color_range_full = true;
+            break;
+        case V4L2_QUANTIZATION_LIM_RANGE:
+            es_fmt.video.b_color_range_full = false;
+            break;
+        default:
+            msg_Err (demux, "unknown quantization: %u",
+                     fmt.fmt.pix.quantization);
+            break;
+    }
+
+    msg_Dbg (demux, "added new video ES %4.4s %ux%u (%ux%u)",
+             (char *)&es_fmt.i_codec,
+             es_fmt.video.i_visible_width, es_fmt.video.i_visible_height,
              es_fmt.video.i_width, es_fmt.video.i_height);
     msg_Dbg (demux, " frame rate: %u/%u", es_fmt.video.i_frame_rate,
              es_fmt.video.i_frame_rate_base);
@@ -502,7 +641,8 @@ static block_t *UserPtrQueue (vlc_object_t *obj, int fd, size_t length)
                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (ptr == MAP_FAILED)
     {
-        msg_Err (obj, "cannot allocate %zu-bytes buffer: %m", length);
+        msg_Err (obj, "cannot allocate %zu-bytes buffer: %s", length,
+                 vlc_strerror_c(errno));
         return NULL;
     }
 
@@ -524,7 +664,7 @@ static block_t *UserPtrQueue (vlc_object_t *obj, int fd, size_t length)
 
     if (v4l2_ioctl (fd, VIDIOC_QBUF, &buf) < 0)
     {
-        msg_Err (obj, "cannot queue buffer: %m");
+        msg_Err (obj, "cannot queue buffer: %s", vlc_strerror_c(errno));
         block_Release (block);
         return NULL;
     }
@@ -558,13 +698,14 @@ static void *UserPtrThread (void *data)
         block_cleanup_push (block);
         while (poll (ufd, numfds, -1) == -1)
            if (errno != EINTR)
-               msg_Err (demux, "poll error: %m");
+               msg_Err (demux, "poll error: %s", vlc_strerror_c(errno));
         vlc_cleanup_pop ();
         canc = vlc_savecancel ();
 
         if (v4l2_ioctl (fd, VIDIOC_DQBUF, &buf) < 0)
         {
-            msg_Err (demux, "cannot dequeue buffer: %m");
+            msg_Err (demux, "cannot dequeue buffer: %s",
+                     vlc_strerror_c(errno));
             block_Release (block);
             continue;
         }
@@ -573,7 +714,7 @@ static void *UserPtrThread (void *data)
         block->i_buffer = buf.length;
         block->i_pts = block->i_dts = GetBufferPTS (&buf);
         block->i_flags |= sys->block_flags;
-        es_out_Control (demux->out, ES_OUT_SET_PCR, block->i_pts);
+        es_out_SetPCR(demux->out, block->i_pts);
         es_out_Send (demux->out, sys->es, block);
     }
     vlc_restorecancel (canc); /* <- hmm, this is purely cosmetic */
@@ -606,7 +747,7 @@ static void *MmapThread (void *data)
         if (poll (ufd, numfds, -1) == -1)
         {
            if (errno != EINTR)
-               msg_Err (demux, "poll error: %m");
+               msg_Err (demux, "poll error: %s", vlc_strerror_c(errno));
            continue;
         }
 
@@ -617,7 +758,7 @@ static void *MmapThread (void *data)
             if (block != NULL)
             {
                 block->i_flags |= sys->block_flags;
-                es_out_Control (demux->out, ES_OUT_SET_PCR, block->i_pts);
+                es_out_SetPCR(demux->out, block->i_pts);
                 es_out_Send (demux->out, sys->es, block);
             }
             vlc_restorecancel (canc);
@@ -628,7 +769,7 @@ static void *MmapThread (void *data)
 #endif
     }
 
-    assert (0);
+    vlc_assert_unreachable ();
 }
 
 static void *ReadThread (void *data)
@@ -657,7 +798,7 @@ static void *ReadThread (void *data)
         if (poll (ufd, numfds, -1) == -1)
         {
            if (errno != EINTR)
-               msg_Err (demux, "poll error: %m");
+               msg_Err (demux, "poll error: %s", vlc_strerror_c(errno));
            continue;
         }
 
@@ -666,7 +807,7 @@ static void *ReadThread (void *data)
             block_t *block = block_Alloc (sys->blocksize);
             if (unlikely(block == NULL))
             {
-                msg_Err (demux, "read error: %m");
+                msg_Err (demux, "read error: %s", vlc_strerror_c(errno));
                 v4l2_read (fd, NULL, 0); /* discard frame */
                 continue;
             }
@@ -678,7 +819,7 @@ static void *ReadThread (void *data)
             if (val != -1)
             {
                 block->i_buffer = val;
-                es_out_Control (demux->out, ES_OUT_SET_PCR, block->i_pts);
+                es_out_SetPCR(demux->out, block->i_pts);
                 es_out_Send (demux->out, sys->es, block);
             }
             else
@@ -690,7 +831,7 @@ static void *ReadThread (void *data)
             GrabVBI (demux, sys->vbi);
 #endif
     }
-    assert (0);
+    vlc_assert_unreachable ();
 }
 
 static int DemuxControl( demux_t *demux, int query, va_list args )

@@ -31,7 +31,7 @@
 /** @struct input_clock_t
  * This structure is used to manage clock drift and reception jitters
  *
- * XXX input_clock_GetTS can be called from any threads. All others functions
+ * XXX input_clock_ConvertTS can be called from any threads. All others functions
  * MUST be called from one and only one thread.
  */
 typedef struct input_clock_t input_clock_t;
@@ -108,7 +108,8 @@ void    input_clock_ChangeSystemOrigin( input_clock_t *, bool b_absolute, mtime_
  * this case, *p_ts0 and *p_ts1 will hold an invalid timestamp.
  * Otherwise it will return VLC_SUCCESS.
  */
-int input_clock_ConvertTS( input_clock_t *, int *pi_rate, mtime_t *pi_ts0, mtime_t *pi_ts1, mtime_t i_ts_bound );
+int input_clock_ConvertTS( vlc_object_t *, input_clock_t *, int *pi_rate,
+                           mtime_t *pi_ts0, mtime_t *pi_ts1, mtime_t i_ts_bound );
 
 /**
  * This function returns the current rate.

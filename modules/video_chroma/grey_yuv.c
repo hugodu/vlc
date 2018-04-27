@@ -32,6 +32,7 @@
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_filter.h>
+#include <vlc_picture.h>
 
 #define SRC_FOURCC  "GREY"
 #define DEST_FOURCC "I420,YUY2"
@@ -52,7 +53,7 @@ static picture_t *GREY_YUY2_Filter( filter_t *, picture_t * );
  *****************************************************************************/
 vlc_module_begin ()
     set_description( N_("Conversions from " SRC_FOURCC " to " DEST_FOURCC) )
-    set_capability( "video filter2", 80 )
+    set_capability( "video converter", 80 )
     set_callbacks( Activate, NULL )
 vlc_module_end ()
 
@@ -72,7 +73,8 @@ static int Activate( vlc_object_t *p_this )
     }
 
     if( p_filter->fmt_in.video.i_width != p_filter->fmt_out.video.i_width
-     || p_filter->fmt_in.video.i_height != p_filter->fmt_out.video.i_height )
+       || p_filter->fmt_in.video.i_height != p_filter->fmt_out.video.i_height
+       || p_filter->fmt_in.video.orientation != p_filter->fmt_out.video.orientation )
         return -1;
 
     switch( p_filter->fmt_in.video.i_chroma )

@@ -55,6 +55,14 @@ function escape(s)
     return (string.gsub(s,"([%^%$%%%.%[%]%*%+%-%?])","%%%1"))
 end
 
+function my_vlc_load(code, filename)
+    if _VERSION == "Lua 5.1" then
+        return loadstring(code, filename)
+    else
+        return load(code, filename)
+    end
+end
+
 function process_raw(filename)
     local input = io.open(filename):read("*a")
     -- find the longest [===[ or ]=====] type sequence and make sure that
@@ -77,7 +85,7 @@ function process_raw(filename)
     io.write("\n")
     end
     --]]
-    return assert(loadstring(code,filename))
+    return assert(my_vlc_load(code,filename))
 end
 
 function process(filename)
@@ -85,9 +93,9 @@ function process(filename)
     local func = false -- process_raw(filename)
     return function(...)
         local new_mtime = vlc.net.stat(filename).modification_time
-        if new_mtime ~= mtime then
+        if func == false or new_mtime ~= mtime then
             -- Re-read the file if it changed
-            if mtime == 0 then
+            if func == false then
                 vlc.msg.dbg("Loading `"..filename.."'")
             else
                 vlc.msg.dbg("Reloading `"..filename.."'")
@@ -156,9 +164,13 @@ function callback_art(data, request, args)
         end
         local metas = item:metas()
         local filename = vlc.strings.decode_uri(string.gsub(metas["artwork_url"],"file://",""))
+        local windowsdrive = string.match(filename, "^/%a:/.+$")  --match windows drive letter
+        if windowsdrive then
+            filename = string.sub(filename, 2)  --remove starting forward slash before the drive letter
+        end
         local size = vlc.net.stat(filename).size
         local ext = string.match(filename,"%.([^%.]-)$")
-        local raw = io.open(filename):read("*a")
+        local raw = io.open(filename, 'rb'):read("*a")
         local content = [[Content-Type: ]]..mimes[ext]..[[
 
 Content-Length: ]]..size..[[
@@ -217,9 +229,9 @@ function rawfile(h,path,url)
     local page = false -- io.open(filename):read("*a")
     local callback = function(data,request)
         local new_mtime = vlc.net.stat(filename).modification_time
-        if mtime ~= new_mtime then
+        if page == false or new_mtime ~= mtime then
             -- Re-read the file if it changed
-            if mtime == 0 then
+            if page == false then
                 vlc.msg.dbg("Loading `"..filename.."'")
             else
                 vlc.msg.dbg("Reloading `"..filename.."'")

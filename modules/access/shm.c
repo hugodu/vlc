@@ -26,6 +26,7 @@
 
 #include <stdarg.h>
 #include <math.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 #ifdef HAVE_SYS_SHM_H
@@ -83,7 +84,7 @@ vlc_module_begin ()
     set_description (N_("Shared memory framebuffer"))
     set_category (CAT_INPUT)
     set_subcategory (SUBCAT_INPUT_ACCESS)
-    set_capability ("access_demux", 0)
+    set_capability ("access", 0)
     set_callbacks (Open, Close)
 
     add_float ("shm-fps", 10.0, FPS_TEXT, FPS_LONGTEXT, true)
@@ -116,7 +117,6 @@ static void CloseFile (demux_sys_t *);
 static void DemuxIPC (void *);
 static void CloseIPC (demux_sys_t *);
 #endif
-static void no_detach (demux_sys_t *);
 
 struct demux_sys_t
 {
@@ -138,10 +138,12 @@ struct demux_sys_t
 static int Open (vlc_object_t *obj)
 {
     demux_t *demux = (demux_t *)obj;
-    demux_sys_t *sys = malloc (sizeof (*sys));
+    if (demux->out == NULL)
+        return VLC_EGENERIC;
+
+    demux_sys_t *sys = vlc_obj_malloc(obj, sizeof (*sys));
     if (unlikely(sys == NULL))
         return VLC_ENOMEM;
-    sys->detach = no_detach;
 
     uint32_t chroma;
     uint16_t width = 0, height = 0;
@@ -167,7 +169,7 @@ static int Open (vlc_object_t *obj)
             chroma = VLC_CODEC_XWD; bpp = 0;
             break;
         default:
-            goto error;
+            return VLC_EGENERIC;
     }
     if (bpp != 0)
     {
@@ -182,10 +184,11 @@ static int Open (vlc_object_t *obj)
     {
         sys->fd = vlc_open (path, O_RDONLY);
         if (sys->fd == -1)
-            msg_Err (demux, "cannot open file %s: %m", path);
+            msg_Err (demux, "cannot open file %s: %s", path,
+                     vlc_strerror_c(errno));
         free (path);
         if (sys->fd == -1)
-            goto error;
+            return VLC_EGENERIC;
 
         sys->detach = CloseFile;
         Demux = DemuxFile;
@@ -195,17 +198,18 @@ static int Open (vlc_object_t *obj)
 #ifdef HAVE_SYS_SHM_H
         sys->mem.length = width * height * (bpp >> 3);
         if (sys->mem.length == 0)
-            goto error;
+            return VLC_EGENERIC;
 
         int id = var_InheritInteger (demux, "shm-id");
         if (id == IPC_PRIVATE)
-            goto error;
+            return VLC_EGENERIC;
         void *mem = shmat (id, NULL, SHM_RDONLY);
 
         if (mem == (const void *)(-1))
         {
-            msg_Err (demux, "cannot attach segment %d: %m", id);
-            goto error;
+            msg_Err (demux, "cannot attach segment %d: %s", id,
+                     vlc_strerror_c(errno));
+            return VLC_EGENERIC;
         }
         sys->mem.addr = mem;
         sys->detach = CloseIPC;
@@ -217,7 +221,7 @@ static int Open (vlc_object_t *obj)
 
     /* Initializes format */
     float rate = var_InheritFloat (obj, "shm-fps");
-    if (rate <= 0.)
+    if (rate <= 0.f)
         goto error;
 
     mtime_t interval = llroundf((float)CLOCK_FREQ / rate);
@@ -248,7 +252,6 @@ static int Open (vlc_object_t *obj)
 
 error:
     sys->detach (sys);
-    free (sys);
     return VLC_EGENERIC;
 }
 
@@ -263,12 +266,6 @@ static void Close (vlc_object_t *obj)
 
     vlc_timer_destroy (sys->timer);
     sys->detach (sys);
-    free (sys);
-}
-
-static void no_detach (demux_sys_t *sys)
-{
-    (void) sys;
 }
 
 /**
@@ -326,19 +323,19 @@ static void DemuxFile (void *data)
     demux_sys_t *sys = demux->p_sys;
 
     /* Copy frame */
-    block_t *block = block_File (sys->fd);
+    block_t *block = block_File(sys->fd, true);
     if (block == NULL)
         return;
     block->i_pts = block->i_dts = mdate ();
 
     /* Send block */
-    es_out_Control (demux->out, ES_OUT_SET_PCR, block->i_pts);
+    es_out_SetPCR(demux->out, block->i_pts);
     es_out_Send (demux->out, sys->es, block);
 }
 
 static void CloseFile (demux_sys_t *sys)
 {
-    close (sys->fd);
+    vlc_close (sys->fd);
 }
 
 #ifdef HAVE_SYS_SHM_H
@@ -355,7 +352,7 @@ static void DemuxIPC (void *data)
     block->i_pts = block->i_dts = mdate ();
 
     /* Send block */
-    es_out_Control (demux->out, ES_OUT_SET_PCR, block->i_pts);
+    es_out_SetPCR(demux->out, block->i_pts);
     es_out_Send (demux->out, sys->es, block);
 }
 

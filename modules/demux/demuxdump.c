@@ -46,10 +46,10 @@ vlc_module_begin ()
     set_subcategory( SUBCAT_INPUT_DEMUX )
     set_description( N_("File dumper") )
     set_capability( "demux", 0 )
-    add_module( "demuxdump-access", "sout access", "file", ACCESS_TEXT,
-                ACCESS_TEXT, true )
-    add_savefile( "demuxdump-file", "stream-demux.dump", FILE_TEXT,
-                  FILE_LONGTEXT, false )
+    add_module("demuxdump-access", "sout access", "file",
+               ACCESS_TEXT, ACCESS_TEXT)
+    add_savefile("demuxdump-file", "stream-demux.dump",
+                 FILE_TEXT, FILE_LONGTEXT)
     add_bool( "demuxdump-append", false, APPEND_TEXT, APPEND_LONGTEXT,
               false )
     set_callbacks( Open, Close )
@@ -69,7 +69,7 @@ static int Open( vlc_object_t * p_this )
     demux_t *p_demux = (demux_t*)p_this;
 
     /* Accept only if forced */
-    if( !p_demux->b_force )
+    if( !p_demux->obj.force )
         return VLC_EGENERIC;
 
     char *access = var_InheritString( p_demux, "demuxdump-access" );
@@ -128,7 +128,7 @@ static int Demux( demux_t *p_demux )
     if( unlikely(block == NULL) )
         return -1;
 
-    int rd = stream_Read( p_demux->s, block->p_buffer, DUMP_BLOCKSIZE );
+    int rd = vlc_stream_Read( p_demux->s, block->p_buffer, DUMP_BLOCKSIZE );
     if ( rd <= 0 )
     {
         block_Release( block );

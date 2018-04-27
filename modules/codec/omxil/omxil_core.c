@@ -29,15 +29,8 @@
 #endif
 
 #include <dlfcn.h>
-#if defined(USE_IOMX)
-/* On dll_open, just check that the OMX_Init symbol already is loaded */
-# define dll_open(name) dlsym(RTLD_DEFAULT, "OMX_Init")
-# define dll_close(handle) do { } while (0)
-# define dlsym(handle, name) dlsym(RTLD_DEFAULT, "I" name)
-#else
-# define dll_open(name) dlopen( name, RTLD_NOW )
-# define dll_close(handle) dlclose(handle)
-#endif
+#define dll_open(name) dlopen( name, RTLD_NOW )
+#define dll_close(handle) dlclose(handle)
 
 #include <vlc_common.h>
 #include <vlc_plugin.h>
@@ -53,15 +46,14 @@
  *****************************************************************************/
 static const char *ppsz_dll_list[] =
 {
-#if defined(USE_IOMX)
-    "libiomx.so", /* Not used when using IOMX, the lib should already be loaded */
-#elif defined(RPI_OMX)
+#if defined(RPI_OMX)
     "/opt/vc/lib/libopenmaxil.so",  /* Broadcom IL core */
-#else
+#elif 1
     "libOMX_Core.so", /* TI OMAP IL core */
     "libOmxCore.so", /* Qualcomm IL core */
-    "libomxil-bellagio.so",  /* Bellagio IL core */
     "libnvomx.so", /* Tegra3 IL core */
+#else
+    "libomxil-bellagio.so",  /* Bellagio IL core reference implementation */
 #endif
     0
 };

@@ -4,7 +4,7 @@
  * Copyright © 2011-2012 VideoLAN
  *
  * Authors: Dominique Martinet <asmadeus@codewreck.org>
- *          Hugo Beauzée-Luyssen <beauze.h@gmail.com>
+ *          Hugo Beauzée-Luyssen <hugo@beauzee.fr>
  *          Rafaël Carré <funman@videolanorg>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -40,6 +40,9 @@
 // For native audio
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
+
+#include <jni.h>
+JNIEnv *android_getEnv(vlc_object_t *p_obj, const char *psz_thread_name);
 
 #define OPENSLES_BUFFERS 255 /* maximum number of buffers */
 #define OPENSLES_BUFLEN  10   /* ms */
@@ -128,8 +131,8 @@ static void Close (vlc_object_t *);
  *****************************************************************************/
 
 vlc_module_begin ()
-    set_description(N_("OpenSLES audio output"))
-    set_shortname(N_("OpenSLES"))
+    set_description("OpenSLES audio output")
+    set_shortname("OpenSLES")
     set_category(CAT_AUDIO)
     set_subcategory(SUBCAT_AUDIO_AOUT)
 
@@ -168,8 +171,8 @@ static int TimeGet(audio_output_t* aout, mtime_t* restrict drift)
     *drift = (CLOCK_FREQ * OPENSLES_BUFLEN * st.count / 1000)
         + sys->samples * CLOCK_FREQ / sys->rate;
 
-    msg_Dbg(aout, "latency %"PRId64" ms, %d/%d buffers", *drift / 1000,
-        (int)st.count, OPENSLES_BUFFERS);
+    /* msg_Dbg(aout, "latency %"PRId64" ms, %d/%d buffers", *drift / 1000,
+        (int)st.count, OPENSLES_BUFFERS); */
 
     return 0;
 }
@@ -349,11 +352,36 @@ static void PlayedCallback (SLAndroidSimpleBufferQueueItf caller, void *pContext
     sys->started = true;
     vlc_mutex_unlock(&sys->lock);
 }
+
+static int aout_get_native_sample_rate(audio_output_t *aout)
+{
+    JNIEnv *p_env;
+    if (!(p_env = android_getEnv(VLC_OBJECT(aout), "opensles")))
+        return -1;
+    jclass cls = (*p_env)->FindClass (p_env, "android/media/AudioTrack");
+    if ((*p_env)->ExceptionCheck(p_env))
+    {
+        (*p_env)->ExceptionClear(p_env);
+        return -1;
+    }
+    jmethodID method = (*p_env)->GetStaticMethodID(p_env, cls,
+                                                   "getNativeOutputSampleRate",
+                                                   "(I)I");
+    /* 3 for AudioManager.STREAM_MUSIC */
+    int sample_rate = (*p_env)->CallStaticIntMethod(p_env, cls, method, 3);
+    (*p_env)->DeleteLocalRef(p_env, cls);
+    msg_Dbg(aout, "%s: %d", __func__, sample_rate);
+    return sample_rate;
+}
+
 /*****************************************************************************
  *
  *****************************************************************************/
 static int Start(audio_output_t *aout, audio_sample_format_t *restrict fmt)
 {
+    if (aout_FormatNbChannels(fmt) == 0 || !AOUT_FMT_LINEAR(fmt))
+        return VLC_EGENERIC;
+
     SLresult       result;
 
     aout_sys_t *sys = aout->sys;
@@ -385,9 +413,20 @@ static int Start(audio_output_t *aout, audio_sample_format_t *restrict fmt)
     //create audio player
     const SLInterfaceID ids2[] = { sys->SL_IID_ANDROIDSIMPLEBUFFERQUEUE, sys->SL_IID_VOLUME };
     static const SLboolean req2[] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE };
-    result = CreateAudioPlayer(sys->engineEngine, &sys->playerObject, &audioSrc,
+
+    if (aout_get_native_sample_rate(aout) >= fmt->i_rate) {
+        result = CreateAudioPlayer(sys->engineEngine, &sys->playerObject, &audioSrc,
                                     &audioSnk, sizeof(ids2) / sizeof(*ids2),
                                     ids2, req2);
+    } else {
+        // Don't try to play back a sample rate higher than the native one,
+        // since OpenSL ES will try to use the fast path, which AudioFlinger
+        // will reject (fast path can't do resampling), and will end up with
+        // too small buffers for the resampling. See http://b.android.com/59453
+        // for details. This bug is still present in 4.4. If it is fixed later
+        // this workaround could be made conditional.
+        result = SL_RESULT_UNKNOWN_ERROR;
+    }
     if (unlikely(result != SL_RESULT_SUCCESS)) {
         /* Try again with a more sensible samplerate */
         fmt->i_rate = 44100;
@@ -422,7 +461,7 @@ static int Start(audio_output_t *aout, audio_sample_format_t *restrict fmt)
     /* XXX: rounding shouldn't affect us at normal sampling rate */
     sys->rate = fmt->i_rate;
     sys->samples_per_buf = OPENSLES_BUFLEN * fmt->i_rate / 1000;
-    sys->buf = malloc(OPENSLES_BUFFERS * sys->samples_per_buf * bytesPerSample());
+    sys->buf = vlc_alloc(sys->samples_per_buf * bytesPerSample(), OPENSLES_BUFFERS);
     if (!sys->buf)
         goto error;
 
@@ -436,6 +475,7 @@ static int Start(audio_output_t *aout, audio_sample_format_t *restrict fmt)
     // we want 16bit signed data native endian.
     fmt->i_format              = VLC_CODEC_S16N;
     fmt->i_physical_channels   = AOUT_CHAN_LEFT | AOUT_CHAN_RIGHT;
+    fmt->channel_type = AUDIO_CHANNEL_TYPE_BITMAP;
 
     SetPositionUpdatePeriod(sys->playerPlay, AOUT_MIN_PREPARE_TIME * 1000 / CLOCK_FREQ);
 
@@ -447,6 +487,9 @@ error:
     if (sys->playerObject) {
         Destroy(sys->playerObject);
         sys->playerObject = NULL;
+        sys->playerBufferQueue = NULL;
+        sys->volumeItf = NULL;
+        sys->playerPlay = NULL;
     }
 
     return VLC_EGENERIC;
@@ -465,6 +508,9 @@ static void Stop(audio_output_t *aout)
 
     Destroy(sys->playerObject);
     sys->playerObject = NULL;
+    sys->playerBufferQueue = NULL;
+    sys->volumeItf = NULL;
+    sys->playerPlay = NULL;
 }
 
 /*****************************************************************************

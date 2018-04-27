@@ -20,7 +20,7 @@ liblua_plugin_la_SOURCES = \
 	lua/libs/net.c \
 	lua/libs/objects.c lua/libs/objects.h \
 	lua/libs/osd.c \
-	lua/libs/playlist.c lua/libs/playlist.h \
+	lua/libs/playlist.c \
 	lua/libs/sd.c \
 	lua/libs/stream.c \
 	lua/libs/strings.c \
@@ -28,7 +28,10 @@ liblua_plugin_la_SOURCES = \
 	lua/libs/video.c \
 	lua/libs/vlm.c \
 	lua/libs/volume.c \
-	lua/libs/xml.c
+	lua/libs/xml.c \
+	lua/libs/io.c \
+	lua/libs/errno.c
+
 if HAVE_WIN32
 liblua_plugin_la_SOURCES += lua/libs/win.c
 endif

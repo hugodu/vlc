@@ -34,26 +34,31 @@
 # include "config.h"
 #endif
 
+#include <math.h>
+#include <stdlib.h>
+
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_meta.h>
 #include <vlc_interface.h>
-#include <vlc_keys.h>
+#include <vlc_actions.h>
+#include <vlc_interrupt.h>
 
 #include "../vlc.h"
 #include "../libs.h"
+#include "misc.h"
 
 /*****************************************************************************
  * Internal lua<->vlc utils
  *****************************************************************************/
-static void vlclua_set_object( lua_State *L, void *id, void *value )
+void vlclua_set_object( lua_State *L, void *id, void *value )
 {
     lua_pushlightuserdata( L, id );
     lua_pushlightuserdata( L, value );
     lua_rawset( L, LUA_REGISTRYINDEX );
 }
 
-static void *vlclua_get_object( lua_State *L, void *id )
+void *vlclua_get_object( lua_State *L, void *id )
 {
     lua_pushlightuserdata( L, id );
     lua_rawget( L, LUA_REGISTRYINDEX );
@@ -118,7 +123,7 @@ static int vlclua_quit( lua_State *L )
     vlc_object_t *p_this = vlclua_get_this( L );
     /* The rc.c code also stops the playlist ... not sure if this is needed
      * though. */
-    libvlc_Quit( p_this->p_libvlc );
+    libvlc_Quit( p_this->obj.libvlc );
     return 0;
 }
 
@@ -131,13 +136,19 @@ static int vlclua_mdate( lua_State *L )
 static int vlclua_mwait( lua_State *L )
 {
     double f = luaL_checknumber( L, 1 );
-    mwait( (int64_t)f );
+
+    vlc_interrupt_t *oint = vlclua_set_interrupt( L );
+    int ret = vlc_mwait_i11e( llround(f) );
+
+    vlc_interrupt_set( oint );
+    if( ret )
+        return luaL_error( L, "Interrupted." );
     return 0;
 }
 
 static int vlclua_action_id( lua_State *L )
 {
-    vlc_action_t i_key = vlc_GetActionId( luaL_checkstring( L, 1 ) );
+    vlc_action_id_t i_key = vlc_actions_get_id( luaL_checkstring( L, 1 ) );
     if (i_key == 0)
         return 0;
     lua_pushnumber( L, i_key );

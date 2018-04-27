@@ -28,6 +28,8 @@
 #include <vlc_arrays.h>
 #include <vlc_dialog.h>
 
+#define WATCH_TIMER_PERIOD    (10 * CLOCK_FREQ) ///< 10s period for the timer
+
 /* List of available commands */
 typedef enum
 {
@@ -49,18 +51,6 @@ typedef enum
     LUA_TEXT
 } lua_datatype_e;
 
-struct extensions_manager_sys_t
-{
-    /* List of activated extensions */
-    DECL_ARRAY( extension_t* ) activated_extensions;
-
-    /* Lock for this list */
-    vlc_mutex_t lock;
-
-    /* Flag indicating that the module is about to be unloaded */
-    bool b_killed;
-};
-
 struct extension_sys_t
 {
     /* Extension general */
@@ -68,6 +58,8 @@ struct extension_sys_t
 
     /* Lua specific */
     lua_State *L;
+
+    vlclua_dtable_t dtable;
 
     /* Thread data */
     vlc_thread_t thread;
@@ -89,23 +81,26 @@ struct extension_sys_t
     } *command;
 
     // The two following booleans are protected by command_lock
-    dialog_progress_bar_t *progress;
+    vlc_dialog_id *p_progress_id;
     vlc_timer_t timer; ///< This timer makes sure Lua never gets stuck >5s
 
     bool b_exiting;
+
+    bool b_thread_running; //< Only accessed out of the extension thread.
+    bool b_activated; ///< Protected by the command lock
 };
 
 /* Extensions: manager functions */
 int Activate( extensions_manager_t *p_mgr, extension_t * );
-bool IsActivated( extensions_manager_t *p_mgr, extension_t * );
 int Deactivate( extensions_manager_t *p_mgr, extension_t * );
+bool QueueDeactivateCommand( extension_t *p_ext );
 void KillExtension( extensions_manager_t *p_mgr, extension_t *p_ext );
-int __PushCommand( extension_t *ext, bool unique, command_type_e cmd, va_list options );
+int PushCommand__( extension_t *ext, bool unique, command_type_e cmd, va_list options );
 static inline int PushCommand( extension_t *ext, int cmd, ... )
 {
     va_list args;
     va_start( args, cmd );
-    int i_ret = __PushCommand( ext, false, cmd, args );
+    int i_ret = PushCommand__( ext, false, cmd, args );
     va_end( args );
     return i_ret;
 }
@@ -113,12 +108,10 @@ static inline int PushCommandUnique( extension_t *ext, int cmd, ... )
 {
     va_list args;
     va_start( args, cmd );
-    int i_ret = __PushCommand( ext, true, cmd, args );
+    int i_ret = PushCommand__( ext, true, cmd, args );
     va_end( args );
     return i_ret;
 }
-bool LockExtension( extension_t *p_ext );
-void UnlockExtension( extension_t *p_ext );
 
 /* Lua specific functions */
 void vlclua_extension_set( lua_State *L, extension_t * );

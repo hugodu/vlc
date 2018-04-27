@@ -22,6 +22,14 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 
+#ifdef HAVE_CONFIG_H
+# include "config.h"
+#endif
+
+#ifdef HAVE_LIBVORBIS
+  #include <vorbis/codec.h>
+#endif
+
 /*****************************************************************************
  * Definitions of structures and functions used by this plugin
  *****************************************************************************/
@@ -43,6 +51,12 @@
 typedef struct oggseek_index_entry demux_index_entry_t;
 typedef struct ogg_skeleton_t ogg_skeleton_t;
 
+typedef struct backup_queue
+{
+    block_t *p_block;
+    mtime_t i_duration;
+} backup_queue_t;
+
 typedef struct logical_stream_s
 {
     ogg_stream_state os;                        /* logical stream of packets */
@@ -58,17 +72,16 @@ typedef struct logical_stream_s
      * data for the decoder. We back them up here in case we need to re-feed
      * them to the decoder. */
     bool             b_force_backup;
-    bool             b_have_updated_format;
     int              i_packets_backup;
     int32_t          i_extra_headers_packets;
     void             *p_headers;
     int              i_headers;
     ogg_int64_t      i_previous_granulepos;
+    ogg_int64_t      i_granulepos_offset;/* first granule offset */
 
     /* program clock reference (in units of 90kHz) derived from the previous
      * granulepos */
     mtime_t          i_pcr;
-    mtime_t          i_interpolated_pcr;
     mtime_t          i_previous_pcr;
 
     /* Misc */
@@ -93,16 +106,54 @@ typedef struct logical_stream_s
     ogg_skeleton_t *p_skel;
 
     /* skip some frames after a seek */
-    int i_skip_frames;
+    unsigned int i_skip_frames;
 
     /* data start offset (absolute) in bytes */
     int64_t i_data_start;
 
-    /* kate streams have the number of headers in the ID header */
-    int i_kate_num_headers;
-
     /* for Annodex logical bitstreams */
     int i_secondary_header_packets;
+
+    /* All blocks which can't be sent because track PCR isn't known yet */
+    struct
+    {
+        block_t **pp_blocks;
+        uint8_t i_size; /* max 255 */
+        uint8_t i_used;
+    } prepcr;
+    /* All blocks that are queued because ES isn't created yet */
+    block_t *p_preparse_block;
+
+    union
+    {
+#ifdef HAVE_LIBVORBIS
+        struct
+        {
+            vorbis_info *p_info;
+            vorbis_comment *p_comment;
+            int i_headers_flags;
+            int i_prev_blocksize;
+        } vorbis;
+#endif
+        struct
+        {
+            /* kate streams have the number of headers in the ID header */
+            int i_num_headers;
+        } kate;
+        struct
+        {
+            bool b_interlaced;
+        } dirac;
+        struct
+        {
+            int32_t i_framesize;
+            int32_t i_framesperpacket;
+        } speex;
+        struct
+        {
+            bool b_old;
+        } flac;
+    } special;
 
 } logical_stream_t;
 
@@ -131,6 +182,13 @@ struct demux_sys_t
     /* program clock reference (in units of 90kHz) derived from the pcr of
      * the sub-streams */
     mtime_t i_pcr;
+    mtime_t i_nzpcr_offset;
+    /* informative only */
+    mtime_t i_pcr_jitter;
+    int64_t i_access_delay;
+
+    /* new stream or starting from a chain */
+    bool b_chained_boundary;
 
     /* bitrate */
     int     i_bitrate;
@@ -153,8 +211,10 @@ struct demux_sys_t
 
     /* */
     vlc_meta_t          *p_meta;
+    int                 cur_seekpoint;
     int                 i_seekpoints;
     seekpoint_t         **pp_seekpoints;
+    unsigned            updates;
 
     /* skeleton */
     struct
@@ -167,15 +227,20 @@ struct demux_sys_t
     int                 i_attachments;
     input_attachment_t  **attachments;
 
+    /* preparsing info */
+    bool b_preparsing_done;
+    bool b_es_created;
+
     /* Length, if available. */
     int64_t i_length;
 
-    DemuxDebug( bool b_seeked; )
+    bool b_slave;
+
 };
 
 
 unsigned const char * Read7BitsVariableLE( unsigned const char *,
-                                           unsigned const char const *,
+                                           unsigned const char *,
                                            uint64_t * );
 bool Ogg_GetBoundsUsingSkeletonIndex( logical_stream_t *p_stream, int64_t i_time,
                                       int64_t *pi_lower, int64_t *pi_upper );

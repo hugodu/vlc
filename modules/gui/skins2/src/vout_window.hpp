@@ -25,6 +25,7 @@
 #define VOUT_WINDOW_HPP
 
 #include "generic_window.hpp"
+#include "dialogs.hpp"
 #include <vlc_vout_window.h>
 
 class OSGraphics;
@@ -55,6 +56,9 @@ public:
 
     /// hotkeys processing
     virtual void processEvent( EvtKey &rEvtKey );
+    virtual void processEvent( EvtScroll &rEvtScroll );
+    virtual void processEvent( EvtMotion &rEvtMotion );
+    virtual void processEvent( EvtMouse &rEvtMouse );
 
     /// set and get Video Control for VoutWindow
     virtual void setCtrlVideo( CtrlVideo* pCtrlVideo );
@@ -68,7 +72,10 @@ public:
     virtual void setOriginalWidth( int width ) { original_width = width; }
     virtual void setOriginalHeight( int height ) { original_height = height; }
 
-    virtual string getType() const { return "Vout"; }
+    /// Resize the window
+    virtual void resize( int width, int height );
+
+    virtual std::string getType() const { return "Vout"; }
 
 private:
 

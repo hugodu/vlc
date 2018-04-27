@@ -30,7 +30,6 @@
 
 #include <vlc_common.h>
 #include <vlc_fs.h>
-#include <vlc_rand.h>
 
 #include <assert.h>
 
@@ -38,9 +37,7 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <fcntl.h>
-#ifdef HAVE_UNISTD_H
-# include <unistd.h>
-#endif
+#include <unistd.h>
 
 /**
  * Opens a FILE pointer.
@@ -96,7 +93,7 @@ FILE *vlc_fopen (const char *filename, const char *mode)
 
     FILE *stream = fdopen (fd, mode);
     if (stream == NULL)
-        close (fd);
+        vlc_close (fd);
 
     return stream;
 }
@@ -129,7 +126,7 @@ int vlc_loaddir( DIR *dir, char ***namelist,
     for (unsigned size = 0;;)
     {
         errno = 0;
-        char *entry = vlc_readdir (dir);
+        const char *entry = vlc_readdir (dir);
         if (entry == NULL)
         {
             if (errno)
@@ -138,10 +135,7 @@ int vlc_loaddir( DIR *dir, char ***namelist,
         }
 
         if (!select (entry))
-        {
-            free (entry);
             continue;
-        }
 
         if (num >= size)
         {
@@ -149,17 +143,16 @@ int vlc_loaddir( DIR *dir, char ***namelist,
             char **newtab = realloc (tab, sizeof (*tab) * (size));
 
             if (unlikely(newtab == NULL))
-            {
-                free (entry);
                 goto error;
-            }
             tab = newtab;
         }
 
-        tab[num++] = entry;
+        tab[num] = strdup(entry);
+        if (likely(tab[num] != NULL))
+            num++;
     }
 
-    if (compar != NULL)
+    if (compar != NULL && num > 0)
         qsort (tab, num, sizeof (*tab),
                (int (*)( const void *, const void *))compar);
     *namelist = tab;
@@ -197,6 +190,9 @@ int vlc_scandir( const char *dirname, char ***namelist,
     }
     return val;
 }
+
+#if defined (_WIN32) || defined (__OS2__)
+# include <vlc_rand.h>
 
 int vlc_mkstemp( char *template )
 {
@@ -237,3 +233,4 @@ int vlc_mkstemp( char *template )
     errno = EEXIST;
     return -1;
 }
+#endif

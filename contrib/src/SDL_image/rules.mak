@@ -9,7 +9,7 @@ PKGS_FOUND += SDL_image
 endif
 
 $(TARBALLS)/SDL_image-$(SDL_IMAGE_VERSION).tar.gz:
-	$(call download,$(SDL_IMAGE_URL))
+	$(call download_pkg,$(SDL_IMAGE_URL),SDL_image)
 
 .sum-SDL_image: SDL_image-$(SDL_IMAGE_VERSION).tar.gz
 
@@ -17,6 +17,7 @@ SDL_image: SDL_image-$(SDL_IMAGE_VERSION).tar.gz .sum-SDL_image
 	$(UNPACK)
 	$(APPLY) $(SRC)/SDL_image/SDL_image.patch
 	$(APPLY) $(SRC)/SDL_image/pkg-config.patch
+	$(UPDATE_AUTOCONFIG)
 	$(MOVE)
 
 DEPS_SDL_image = jpeg $(DEPS_jpeg) tiff $(DEPS_tiff) \

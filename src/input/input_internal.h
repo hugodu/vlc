@@ -24,11 +24,18 @@
 #ifndef LIBVLC_INPUT_INTERNAL_H
 #define LIBVLC_INPUT_INTERNAL_H 1
 
+#include <stddef.h>
+#include <stdatomic.h>
+
 #include <vlc_access.h>
 #include <vlc_demux.h>
 #include <vlc_input.h>
+#include <vlc_viewpoint.h>
 #include <libvlc.h>
 #include "input_interface.h"
+#include "misc/interrupt.h"
+
+struct input_stats;
 
 /*****************************************************************************
  *  Private input fields
@@ -39,7 +46,9 @@
 /* input_source_t: gathers all information per input source */
 typedef struct
 {
-    demux_t  *p_demux; /**< Demux plugin instance */
+    struct vlc_common_members obj;
+
+    demux_t  *p_demux; /**< Demux object (most downstream) */
 
     /* Title infos for that input */
     bool         b_title_demux; /* Titles/Seekpoints provided by demux */
@@ -60,6 +69,7 @@ typedef struct
     bool b_can_rate_control;
     bool b_can_stream_record;
     bool b_rescale_ts;
+    double f_fps;
 
     /* */
     int64_t i_pts_delay;
@@ -75,23 +85,26 @@ typedef struct
 } input_control_t;
 
 /** Private input fields */
-struct input_thread_private_t
+typedef struct input_thread_private_t
 {
+    struct input_thread_t input;
+
     /* Global properties */
-    double      f_fps;
-    int         i_state;
+    bool        b_preparsing;
     bool        b_can_pause;
     bool        b_can_rate_control;
     bool        b_can_pace_control;
 
     /* Current state */
+    int         i_state;
+    bool        is_running;
+    bool        is_stopped;
     bool        b_recording;
     int         i_rate;
 
     /* Playtime configuration and state */
     int64_t     i_start;    /* :start-time,0 by default */
     int64_t     i_stop;     /* :stop-time, 0 if none */
-    int64_t     i_run;      /* :run-time, 0 if none */
     int64_t     i_time;     /* Current time */
     bool        b_fast_seek;/* :input-fast-seek */
 
@@ -100,10 +113,13 @@ struct input_thread_private_t
     sout_instance_t *p_sout;            /* Idem ? */
     es_out_t        *p_es_out;
     es_out_t        *p_es_out_display;
+    vlc_viewpoint_t viewpoint;
+    bool            viewpoint_changed;
+    vlc_renderer_item_t *p_renderer;
 
     /* Title infos FIXME multi-input (not easy) ? */
     int          i_title;
-    input_title_t **title;
+    const input_title_t **title;
 
     int i_title_offset;
     int i_seekpoint_offset;
@@ -116,6 +132,7 @@ struct input_thread_private_t
     /* Input attachment */
     int i_attachment;
     input_attachment_t **attachment;
+    const demux_t **attachment_demux;
 
     /* Main input properties */
 
@@ -123,7 +140,7 @@ struct input_thread_private_t
     input_item_t   *p_item;
 
     /* Main source */
-    input_source_t input;
+    input_source_t *master;
     /* Slave sources (subs, and others) */
     int            i_slave;
     input_source_t **slave;
@@ -133,26 +150,7 @@ struct input_thread_private_t
     input_resource_t *p_resource_private;
 
     /* Stats counters */
-    struct {
-        counter_t *p_read_packets;
-        counter_t *p_read_bytes;
-        counter_t *p_input_bitrate;
-        counter_t *p_demux_read;
-        counter_t *p_demux_bitrate;
-        counter_t *p_demux_corrupted;
-        counter_t *p_demux_discontinuity;
-        counter_t *p_decoded_audio;
-        counter_t *p_decoded_video;
-        counter_t *p_decoded_sub;
-        counter_t *p_sout_sent_packets;
-        counter_t *p_sout_sent_bytes;
-        counter_t *p_sout_send_bitrate;
-        counter_t *p_played_abuffers;
-        counter_t *p_lost_abuffers;
-        counter_t *p_displayed_pictures;
-        counter_t *p_lost_pictures;
-        vlc_mutex_t counters_lock;
-    } counters;
+    struct input_stats *stats;
 
     /* Buffer of pending actions */
     vlc_mutex_t lock_control;
@@ -160,18 +158,20 @@ struct input_thread_private_t
     int i_control;
     input_control_t control[INPUT_CONTROL_FIFO_SIZE];
 
-    bool b_abort;
-    bool is_running;
     vlc_thread_t thread;
-};
+    vlc_interrupt_t interrupt;
+} input_thread_private_t;
+
+static inline input_thread_private_t *input_priv(input_thread_t *input)
+{
+    return container_of(input, input_thread_private_t, input);
+}
 
 /***************************************************************************
  * Internal control helpers
  ***************************************************************************/
 enum input_control_e
 {
-    INPUT_CONTROL_SET_DIE,
-
     INPUT_CONTROL_SET_STATE,
 
     INPUT_CONTROL_SET_RATE,
@@ -197,20 +197,26 @@ enum input_control_e
     INPUT_CONTROL_NAV_DOWN,     // INPUT_NAV_* and DEMUX_NAV_*.
     INPUT_CONTROL_NAV_LEFT,
     INPUT_CONTROL_NAV_RIGHT,
+    INPUT_CONTROL_NAV_POPUP,
+    INPUT_CONTROL_NAV_MENU,
 
     INPUT_CONTROL_SET_ES,
     INPUT_CONTROL_RESTART_ES,
+
+    INPUT_CONTROL_SET_VIEWPOINT,    // new absolute viewpoint
+    INPUT_CONTROL_SET_INITIAL_VIEWPOINT, // set initial viewpoint (generally from video)
+    INPUT_CONTROL_UPDATE_VIEWPOINT, // update viewpoint relative to current
 
     INPUT_CONTROL_SET_AUDIO_DELAY,
     INPUT_CONTROL_SET_SPU_DELAY,
 
     INPUT_CONTROL_ADD_SLAVE,
 
-    INPUT_CONTROL_ADD_SUBTITLE,
-
     INPUT_CONTROL_SET_RECORD_STATE,
 
     INPUT_CONTROL_SET_FRAME_NEXT,
+
+    INPUT_CONTROL_SET_RENDERER,
 };
 
 /* Internal helpers */
@@ -220,6 +226,8 @@ enum input_control_e
  */
 void input_ControlPush( input_thread_t *, int i_type, vlc_value_t * );
 
+bool input_Stopped( input_thread_t * );
+
 /* Bound pts_delay */
 #define INPUT_PTS_DELAY_MAX INT64_C(60000000)
 
@@ -227,8 +235,8 @@ void input_ControlPush( input_thread_t *, int i_type, vlc_value_t * );
  * Item metadata
  **********************************************************************/
 /* input_ExtractAttachmentAndCacheArt:
- *  Becarefull; p_item lock HAS to be taken */
-void input_ExtractAttachmentAndCacheArt( input_thread_t *p_input );
+ *  Be careful: p_item lock will be taken! */
+void input_ExtractAttachmentAndCacheArt( input_thread_t *, const char *name );
 
 /***************************************************************************
  * Internal prototypes
@@ -243,15 +251,45 @@ void input_ControlVarTitle( input_thread_t *, int i_title );
 void input_ConfigVarInit ( input_thread_t * );
 
 /* Subtitles */
-char **subtitles_Detect( input_thread_t *, char* path, const char *fname );
+int subtitles_Detect( input_thread_t *, char *, const char *, input_item_slave_t ***, int * );
 int subtitles_Filter( const char *);
-
-/* input.c */
-void input_SplitMRL( const char **, const char **, const char **,
-                     const char **, char * );
 
 /* meta.c */
 void vlc_audio_replay_gain_MergeFromMeta( audio_replay_gain_t *p_dst,
                                           const vlc_meta_t *p_meta );
+
+/* item.c */
+void input_item_node_PostAndDelete( input_item_node_t *p_node );
+
+/* stats.c */
+typedef struct input_rate_t
+{
+    vlc_mutex_t lock;
+    uintmax_t updates;
+    uintmax_t value;
+    struct
+    {
+        uintmax_t value;
+        mtime_t   date;
+    } samples[2];
+} input_rate_t;
+
+struct input_stats {
+    input_rate_t input_bitrate;
+    input_rate_t demux_bitrate;
+    atomic_uintmax_t demux_corrupted;
+    atomic_uintmax_t demux_discontinuity;
+    atomic_uintmax_t decoded_audio;
+    atomic_uintmax_t decoded_video;
+    atomic_uintmax_t played_abuffers;
+    atomic_uintmax_t lost_abuffers;
+    atomic_uintmax_t displayed_pictures;
+    atomic_uintmax_t lost_pictures;
+};
+
+struct input_stats *input_stats_Create(void);
+void input_stats_Destroy(struct input_stats *);
+void input_rate_Add(input_rate_t *, uintmax_t);
+void input_stats_Compute(struct input_stats *, input_stats_t*);
 
 #endif

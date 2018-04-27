@@ -27,7 +27,7 @@
 
 #include "libvlc_internal.h"
 #include <vlc_modules.h>
-#include <vlc/libvlc.h>
+#include <vlc/vlc.h>
 
 #include <vlc_interface.h>
 #include <vlc_vlm.h>
@@ -37,8 +37,6 @@
 #include <assert.h>
 
 #include "../src/revision.c"
-
-static const char nomemstr[] = "Insufficient memory";
 
 libvlc_instance_t * libvlc_new( int argc, const char *const *argv )
 {
@@ -65,9 +63,7 @@ libvlc_instance_t * libvlc_new( int argc, const char *const *argv )
     }
 
     p_new->p_libvlc_int = p_libvlc_int;
-    p_new->libvlc_vlm.p_vlm = NULL;
-    p_new->libvlc_vlm.p_event_manager = NULL;
-    p_new->libvlc_vlm.pf_release = NULL;
+    p_new->vlm = NULL;
     p_new->ref_count = 1;
     p_new->p_callback_list = NULL;
     vlc_mutex_init(&p_new->instance_lock);
@@ -102,8 +98,9 @@ void libvlc_release( libvlc_instance_t *p_instance )
     if( refs == 0 )
     {
         vlc_mutex_destroy( lock );
-        if( p_instance->libvlc_vlm.pf_release )
-            p_instance->libvlc_vlm.pf_release( p_instance );
+        if( p_instance->vlm != NULL )
+            libvlc_vlm_release( p_instance );
+        libvlc_Quit( p_instance->p_libvlc_int );
         libvlc_InternalCleanup( p_instance->p_libvlc_int );
         libvlc_InternalDestroy( p_instance->p_libvlc_int );
         free( p_instance );
@@ -156,7 +153,7 @@ void libvlc_set_app_id(libvlc_instance_t *p_i, const char *id,
 
     var_SetString(p_libvlc, "app-id", id ? id : "");
     var_SetString(p_libvlc, "app-version", version ? version : "");
-    var_SetString(p_libvlc, "app-version", icon ? icon : "");
+    var_SetString(p_libvlc, "app-icon-name", icon ? icon : "");
 }
 
 const char * libvlc_get_version(void)
@@ -252,10 +249,12 @@ libvlc_module_description_t *libvlc_audio_filter_list_get( libvlc_instance_t *p_
 
 libvlc_module_description_t *libvlc_video_filter_list_get( libvlc_instance_t *p_instance )
 {
-    return module_description_list_get( p_instance, "video filter2" );
+    return module_description_list_get( p_instance, "video filter" );
 }
 
 int64_t libvlc_clock(void)
 {
     return mdate();
 }
+
+const char vlc_module_name[] = "libvlc";

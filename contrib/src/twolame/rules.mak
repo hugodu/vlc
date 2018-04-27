@@ -11,24 +11,19 @@ PKGS_FOUND += twolame
 endif
 
 $(TARBALLS)/twolame-$(TWOLAME_VERSION).tar.gz:
-	$(call download,$(TWOLAME_URL))
+	$(call download_pkg,$(TWOLAME_URL),twolame)
 
-$(TARBALLS)/twolame-winutil.h:
-	$(call download,"http://twolame.svn.sourceforge.net/viewvc/*checkout*/twolame/trunk/win32/winutil.h")
+.sum-twolame: twolame-$(TWOLAME_VERSION).tar.gz
 
-.sum-twolame: twolame-$(TWOLAME_VERSION).tar.gz twolame-winutil.h
-
-twolame: twolame-$(TWOLAME_VERSION).tar.gz twolame-winutil.h .sum-twolame
+twolame: twolame-$(TWOLAME_VERSION).tar.gz .sum-twolame
 	$(UNPACK)
-ifdef HAVE_WIN32
-	cp -f $(filter %winutil.h,$^) $@-$(TWOLAME_VERSION)/win32/winutil.h
-endif
 	$(UPDATE_AUTOCONFIG) && cd $(UNPACK_DIR) && cp config.guess config.sub build-scripts
 	$(MOVE)
 
 .twolame: twolame
+	$(RECONF)
 	cd $< && $(HOSTVARS) CFLAGS="${CFLAGS} -DLIBTWOLAME_STATIC" ./configure $(HOSTCONF)
 	cd $< && $(MAKE)
-	cd $</libtwolame && $(MAKE) install
+	cd $< && $(MAKE) -C libtwolame install
 	cd $< && $(MAKE) install-data
 	touch $@

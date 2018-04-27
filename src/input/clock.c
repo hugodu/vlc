@@ -404,7 +404,7 @@ mtime_t input_clock_GetWakeup( input_clock_t *cl )
 /*****************************************************************************
  * input_clock_ConvertTS
  *****************************************************************************/
-int input_clock_ConvertTS( input_clock_t *cl,
+int input_clock_ConvertTS( vlc_object_t *p_object, input_clock_t *cl,
                            int *pi_rate, mtime_t *pi_ts0, mtime_t *pi_ts1,
                            mtime_t i_ts_bound )
 {
@@ -417,6 +417,8 @@ int input_clock_ConvertTS( input_clock_t *cl,
     if( !cl->b_has_reference )
     {
         vlc_mutex_unlock( &cl->lock );
+        msg_Err(p_object, "Timestamp conversion failed for %"PRId64": "
+                "no reference clock", *pi_ts0);
         *pi_ts0 = VLC_TS_INVALID;
         if( pi_ts1 )
             *pi_ts1 = VLC_TS_INVALID;
@@ -436,7 +438,7 @@ int input_clock_ConvertTS( input_clock_t *cl,
         *pi_ts0 += i_ts_delay;
     }
 
-    /* XXX we do not ipdate i_ts_max on purpose */
+    /* XXX we do not update i_ts_max on purpose */
     if( pi_ts1 && *pi_ts1 > VLC_TS_INVALID )
     {
         *pi_ts1 = ClockStreamToSystem( cl, *pi_ts1 + AvgGet( &cl->drift ) ) +
@@ -446,9 +448,15 @@ int input_clock_ConvertTS( input_clock_t *cl,
     vlc_mutex_unlock( &cl->lock );
 
     /* Check ts validity */
-    if( i_ts_bound != INT64_MAX &&
-        *pi_ts0 > VLC_TS_INVALID && *pi_ts0 >= mdate() + i_ts_delay + i_ts_buffering + i_ts_bound )
-        return VLC_EGENERIC;
+    if (i_ts_bound != INT64_MAX && *pi_ts0 > VLC_TS_INVALID) {
+        if (*pi_ts0 >= mdate() + i_ts_delay + i_ts_buffering + i_ts_bound) {
+            msg_Err(p_object,
+                "Timestamp conversion failed (delay %"PRId64", buffering "
+                "%"PRId64", bound %"PRId64")",
+                i_ts_delay, i_ts_buffering, i_ts_bound);
+            return VLC_EGENERIC;
+        }
+    }
 
     return VLC_SUCCESS;
 }

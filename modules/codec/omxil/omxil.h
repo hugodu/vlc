@@ -36,9 +36,27 @@
 #include "omxil_utils.h"
 #include "omxil_core.h"
 
+enum
+{
+    BUF_STATE_NOT_OWNED = 0,
+    BUF_STATE_OWNED,
+};
+
 /*****************************************************************************
  * decoder_sys_t : omxil decoder descriptor
  *****************************************************************************/
+typedef struct OmxFifo
+{
+    vlc_mutex_t lock;
+    vlc_cond_t  wait;
+
+    OMX_BUFFERHEADERTYPE *p_first;
+    OMX_BUFFERHEADERTYPE **pp_last;
+
+    int offset;
+
+} OmxFifo;
+
 typedef struct OmxPort
 {
     bool b_valid;
@@ -54,17 +72,7 @@ typedef struct OmxPort
     unsigned int i_buffers;
     OMX_BUFFERHEADERTYPE **pp_buffers;
 
-    struct fifo_t
-    {
-      vlc_mutex_t         lock;
-      vlc_cond_t          wait;
-
-      OMX_BUFFERHEADERTYPE *p_first;
-      OMX_BUFFERHEADERTYPE **pp_last;
-
-      int offset;
-
-    } fifo;
+    OmxFifo fifo;
 
     OmxFormatParam format_param;
 
@@ -72,7 +80,6 @@ typedef struct OmxPort
     OMX_BOOL b_update_def;
     OMX_BOOL b_direct;
     OMX_BOOL b_flushed;
-
 } OmxPort;
 
 struct decoder_sys_t
@@ -84,6 +91,7 @@ struct decoder_sys_t
     char psz_component[OMX_MAX_STRINGNAME_SIZE];
     char ppsz_components[MAX_COMPONENTS_LIST_SIZE][OMX_MAX_STRINGNAME_SIZE];
     unsigned int components;
+    int i_quirks;
 
     OmxEventQueue event_queue;
 
@@ -94,9 +102,11 @@ struct decoder_sys_t
 
     bool b_error;
 
+    bool b_aspect_ratio_handled;
+
     date_t end_date;
 
-    size_t i_nal_size_length; /* Length of the NAL size field for H264 */
+    uint8_t i_nal_size_length; /* Length of the NAL size field for H264 */
     int b_use_pts;
 
 };

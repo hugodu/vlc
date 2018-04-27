@@ -34,6 +34,7 @@
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_filter.h>
+#include <vlc_picture.h>
 
 /*****************************************************************************
  * Local and extern prototypes.
@@ -41,7 +42,6 @@
 static int  Activate( vlc_object_t * );
 static void Destroy( vlc_object_t * );
 static picture_t *Filter( filter_t *, picture_t * );
-static int alloc_init( filter_t *, void * );
 
 /* This module effectively implements a form of picture-in-picture.
  *  - The outer picture is called the canvas.
@@ -104,7 +104,7 @@ static int alloc_init( filter_t *, void * );
 vlc_module_begin ()
     set_shortname( N_("Canvas") )
     set_description( N_("Canvas video filter") )
-    set_capability( "video filter2", 0 )
+    set_capability( "video filter", 0 )
     set_help( CANVAS_HELP )
     set_callbacks( Activate, Destroy )
 
@@ -132,14 +132,19 @@ struct filter_sys_t
     filter_chain_t *p_chain;
 };
 
+static picture_t *video_new( filter_t *p_filter )
+{
+    return filter_NewPicture( p_filter->owner.sys );
+}
+
 /*****************************************************************************
  *
  *****************************************************************************/
 static int Activate( vlc_object_t *p_this )
 {
     filter_t *p_filter = (filter_t *)p_this;
-    unsigned i_canvas_width; /* width of output canvas */
-    unsigned i_canvas_height; /* height of output canvas */
+    unsigned i_canvas_width; /* visible width of output canvas */
+    unsigned i_canvas_height; /* visible height of output canvas */
     unsigned i_canvas_aspect; /* canvas PictureAspectRatio */
     es_format_t fmt; /* target format after up/down conversion */
     char psz_croppadd[100];
@@ -180,11 +185,17 @@ static int Activate( vlc_object_t *p_this )
         return VLC_EGENERIC;
     }
 
-    i_fmt_in_aspect = (int64_t)p_filter->fmt_in.video.i_sar_num *
-                      p_filter->fmt_in.video.i_width *
+    if( p_filter->fmt_in.video.i_sar_num )
+        i_fmt_in_aspect = (int64_t)p_filter->fmt_in.video.i_sar_num *
+                      p_filter->fmt_in.video.i_visible_width *
                       VOUT_ASPECT_FACTOR /
                       p_filter->fmt_in.video.i_sar_den /
-                      p_filter->fmt_in.video.i_height;
+                      p_filter->fmt_in.video.i_visible_height;
+    else
+        i_fmt_in_aspect = (int64_t)p_filter->fmt_in.video.i_visible_width *
+                      VOUT_ASPECT_FACTOR /
+                      p_filter->fmt_in.video.i_visible_height;
+
     psz_aspect = var_CreateGetNonEmptyString( p_filter, CFG_PREFIX "aspect" );
     if( psz_aspect )
     {
@@ -207,10 +218,10 @@ static int Activate( vlc_object_t *p_this )
          * has the same sample aspect ratio as the subpicture */
         /* aspect = subpic_sar * canvas_width / canvas_height
          *  where subpic_sar = subpic_ph * subpic_par / subpic_pw */
-        i_canvas_aspect = (uint64_t) p_filter->fmt_in.video.i_height
+        i_canvas_aspect = (uint64_t) p_filter->fmt_in.video.i_visible_height
                         * i_fmt_in_aspect
                         * i_canvas_width
-                        / (i_canvas_height * p_filter->fmt_in.video.i_width);
+                        / (i_canvas_height * p_filter->fmt_in.video.i_visible_width);
     }
 
     b_padd = var_CreateGetBool( p_filter, CFG_PREFIX "padd" );
@@ -220,8 +231,14 @@ static int Activate( vlc_object_t *p_this )
         return VLC_ENOMEM;
     p_filter->p_sys = p_sys;
 
-    p_sys->p_chain = filter_chain_New( p_filter, "video filter2", true,
-                                       alloc_init, NULL, p_filter );
+    filter_owner_t owner = {
+        .sys = p_filter,
+        .video = {
+            .buffer_new = video_new,
+        },
+    };
+
+    p_sys->p_chain = filter_chain_NewVideo( p_filter, true, &owner );
     if( !p_sys->p_chain )
     {
         msg_Err( p_filter, "Could not allocate filter chain" );
@@ -232,8 +249,8 @@ static int Activate( vlc_object_t *p_this )
     es_format_Copy( &fmt, &p_filter->fmt_in );
 
     /* one dimension will end up with one of the following: */
-    fmt.video.i_width = i_canvas_width;
-    fmt.video.i_height = i_canvas_height;
+    fmt.video.i_visible_width = i_canvas_width;
+    fmt.video.i_visible_height = i_canvas_height;
 
     if( b_padd )
     {
@@ -246,12 +263,12 @@ static int Activate( vlc_object_t *p_this )
              * width = upconverted_subpic_height * subpic_par / canvas_sar
              *  where canvas_sar = canvas_width / (canvas_height * canvas_par)
              * then simplify */
-            fmt.video.i_width = i_canvas_width
+            fmt.video.i_visible_width = i_canvas_width
                               * i_fmt_in_aspect
                               / i_canvas_aspect;
-            if( fmt.video.i_width & 1 ) fmt.video.i_width -= 1;
+            if( fmt.video.i_visible_width & 1 ) fmt.video.i_visible_width -= 1;
 
-            i_padd = (i_canvas_width - fmt.video.i_width) / 2;
+            i_padd = (i_canvas_width - fmt.video.i_visible_width) / 2;
             i_offset = (i_padd & 1);
             snprintf( psz_croppadd, 100, "croppadd{paddleft=%d,paddright=%d}",
                       i_padd - i_offset, i_padd + i_offset );
@@ -260,12 +277,12 @@ static int Activate( vlc_object_t *p_this )
         {
             /* The canvas has a taller aspect than the subpicture:
              *  ie, letterbox the [scaled] subpicture */
-            fmt.video.i_height = i_canvas_height
+            fmt.video.i_visible_height = i_canvas_height
                                * i_canvas_aspect
                                / i_fmt_in_aspect;
-            if( fmt.video.i_height & 1 ) fmt.video.i_height -= 1;
+            if( fmt.video.i_visible_height & 1 ) fmt.video.i_visible_height -= 1;
 
-            i_padd = (i_canvas_height - fmt.video.i_height ) / 2;
+            i_padd = (i_canvas_height - fmt.video.i_visible_height ) / 2;
             i_offset = (i_padd & 1);
             snprintf( psz_croppadd, 100, "croppadd{paddtop=%d,paddbottom=%d}",
                       i_padd - i_offset, i_padd + i_offset );
@@ -278,12 +295,12 @@ static int Activate( vlc_object_t *p_this )
         {
             /* The canvas has a narrower aspect than the subpicture:
              *  ie, crop the [scaled] subpicture horizontally */
-            fmt.video.i_width = i_canvas_width
+            fmt.video.i_visible_width = i_canvas_width
                               * i_fmt_in_aspect
                               / i_canvas_aspect;
-            if( fmt.video.i_width & 1 ) fmt.video.i_width -= 1;
+            if( fmt.video.i_visible_width & 1 ) fmt.video.i_visible_width -= 1;
 
-            i_padd = (fmt.video.i_width - i_canvas_width) / 2;
+            i_padd = (fmt.video.i_visible_width - i_canvas_width) / 2;
             i_offset = (i_padd & 1);
             snprintf( psz_croppadd, 100, "croppadd{cropleft=%d,cropright=%d}",
                       i_padd - i_offset, i_padd + i_offset );
@@ -292,12 +309,12 @@ static int Activate( vlc_object_t *p_this )
         {
             /* The canvas has a shorter aspect than the subpicture:
              *  ie, crop the [scaled] subpicture vertically */
-            fmt.video.i_height = i_canvas_height
+            fmt.video.i_visible_height = i_canvas_height
                                * i_canvas_aspect
                                / i_fmt_in_aspect;
-            if( fmt.video.i_height & 1 ) fmt.video.i_height -= 1;
+            if( fmt.video.i_visible_height & 1 ) fmt.video.i_visible_height -= 1;
 
-            i_padd = (fmt.video.i_height - i_canvas_height) / 2;
+            i_padd = (fmt.video.i_visible_height - i_canvas_height) / 2;
             i_offset = (i_padd & 1);
             snprintf( psz_croppadd, 100, "croppadd{croptop=%d,cropbottom=%d}",
                       i_padd - i_offset, i_padd + i_offset );
@@ -308,30 +325,46 @@ static int Activate( vlc_object_t *p_this )
      *  probably not, as some codecs can make use of that information
      *  and it should be a scaled version of the input clean area
      *   -- davidf */
-    fmt.video.i_visible_width = fmt.video.i_width;
-    fmt.video.i_visible_height = fmt.video.i_height;
+    fmt.video.i_width = p_filter->fmt_in.video.i_width * fmt.video.i_visible_width / p_filter->fmt_in.video.i_visible_width;
+    fmt.video.i_height = p_filter->fmt_in.video.i_height * fmt.video.i_visible_height / p_filter->fmt_in.video.i_visible_height;
 
     filter_chain_Reset( p_sys->p_chain, &p_filter->fmt_in, &fmt );
     /* Append scaling module */
-    filter_chain_AppendFilter( p_sys->p_chain, NULL, NULL, NULL, NULL );
-    /* Append padding module */
-    filter_chain_AppendFromString( p_sys->p_chain, psz_croppadd );
+    if ( filter_chain_AppendConverter( p_sys->p_chain, NULL, NULL ) )
+    {
+        msg_Err( p_filter, "Could not append scaling filter" );
+        free( p_sys );
+        return VLC_EGENERIC;
+    }
 
-    fmt = *filter_chain_GetFmtOut( p_sys->p_chain );
-    es_format_Copy( &p_filter->fmt_out, &fmt );
+    /* Append croppadd module if we actually do cropping or padding instead of just scaling*/
+    if( i_padd > 0 )
+    {
+        if ( !filter_chain_AppendFromString( p_sys->p_chain, psz_croppadd ) )
+        {
+            msg_Err( p_filter, "Could not append cropadd filter" );
+            filter_chain_Delete( p_sys->p_chain );
+            free( p_sys );
+            return VLC_EGENERIC;
+        }
+    }
 
-    p_filter->fmt_out.video.i_sar_num =
-        i_canvas_aspect    * p_filter->fmt_out.video.i_height;
-    p_filter->fmt_out.video.i_sar_den =
-        VOUT_ASPECT_FACTOR * p_filter->fmt_out.video.i_width;
+    es_format_Copy( &p_filter->fmt_out,
+                    filter_chain_GetFmtOut( p_sys->p_chain ) );
 
-    if( p_filter->fmt_out.video.i_width != i_canvas_width
-     || p_filter->fmt_out.video.i_height != i_canvas_height )
+    vlc_ureduce( &p_filter->fmt_out.video.i_sar_num,
+        &p_filter->fmt_out.video.i_sar_den,
+        i_canvas_aspect    * p_filter->fmt_out.video.i_visible_height,
+        VOUT_ASPECT_FACTOR * p_filter->fmt_out.video.i_visible_width,
+        0);
+
+    if( p_filter->fmt_out.video.i_visible_width != i_canvas_width
+     || p_filter->fmt_out.video.i_visible_height != i_canvas_height )
     {
         msg_Warn( p_filter, "Looks like something went wrong. "
                   "Output size is %dx%d while we asked for %dx%d",
-                  p_filter->fmt_out.video.i_width,
-                  p_filter->fmt_out.video.i_height,
+                  p_filter->fmt_out.video.i_visible_width,
+                  p_filter->fmt_out.video.i_visible_height,
                   i_canvas_width, i_canvas_height );
     }
 
@@ -346,8 +379,9 @@ static int Activate( vlc_object_t *p_this )
 static void Destroy( vlc_object_t *p_this )
 {
     filter_t *p_filter = (filter_t *)p_this;
-    filter_chain_Delete( p_filter->p_sys->p_chain );
-    free( p_filter->p_sys );
+    filter_sys_t *p_sys = p_filter->p_sys;
+    filter_chain_Delete( p_sys->p_chain );
+    free( p_sys );
 }
 
 /*****************************************************************************
@@ -355,26 +389,6 @@ static void Destroy( vlc_object_t *p_this )
  *****************************************************************************/
 static picture_t *Filter( filter_t *p_filter, picture_t *p_pic )
 {
-    return filter_chain_VideoFilter( p_filter->p_sys->p_chain, p_pic );
-}
-
-/*****************************************************************************
- *
- *****************************************************************************/
-static picture_t *video_new( filter_t *p_filter )
-{
-    return filter_NewPicture( (filter_t*)p_filter->p_owner );
-}
-
-static void video_del( filter_t *p_filter, picture_t *p_pic )
-{
-    return filter_DeletePicture( (filter_t*)p_filter->p_owner, p_pic );
-}
-
-static int alloc_init( filter_t *p_filter, void *p_data )
-{
-    p_filter->p_owner = p_data;
-    p_filter->pf_video_buffer_new = video_new;
-    p_filter->pf_video_buffer_del = video_del;
-    return VLC_SUCCESS;
+    filter_sys_t *p_sys = p_filter->p_sys;
+    return filter_chain_VideoFilter( p_sys->p_chain, p_pic );
 }

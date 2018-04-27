@@ -1,7 +1,16 @@
 /*****************************************************************************
  * missing.c: missing libvlccore symbols
  *****************************************************************************
- * Copyright (C) 2008 Rémi Denis-Courmont
+ * Copyright (C) 2008-2011 Rémi Denis-Courmont
+ * Copyright (C) 2009-2014 VLC authors and VideoLAN
+ * $Id$
+ *
+ * Authors: Rémi Denis-Courmont <rem # videolan : org>
+ *          Pierre Ynard <linkfanel # yahoo fr>
+ *          Toralf Niebuhr <gmthor85 # aim com>
+ *          Felix Paul Kühne <fkuehne # videolan org>
+ *          Jean-Paul Saman <jpsaman # videolan org>
+ *          Antoine Cellerier <dionoea # videolan org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -29,214 +38,64 @@
 #include <vlc_common.h>
 #include <assert.h>
 
-#ifndef ENABLE_HTTPD
-# include <vlc_httpd.h>
-
-char *httpd_ClientIP (const httpd_client_t *cl, char *psz_ip, int *port)
-{
-    (void) cl; (void) psz_ip; (void) port;
-    assert (0);
-}
-
-void httpd_ClientModeBidir (httpd_client_t *cl)
-{
-    (void) cl;
-    assert (0);
-}
-
-void httpd_ClientModeStream (httpd_client_t *cl)
-{
-    (void) cl;
-    assert (0);
-}
-
-httpd_file_sys_t *httpd_FileDelete (httpd_file_t *file)
-{
-    (void) file;
-    assert (0);
-}
-
-httpd_file_t *httpd_FileNew (httpd_host_t *host,
-                             const char *url, const char *content_type,
-                             const char *login, const char *password,
-                             httpd_file_callback_t cb, httpd_file_sys_t *data)
-{
-    (void) host;
-    (void) url; (void) content_type;
-    (void) login; (void) password;
-    (void) cb; (void) data;
-    assert (0);
-}
-
-httpd_handler_sys_t *httpd_HandlerDelete (httpd_handler_t *handler)
-{
-    (void) handler;
-    assert (0);
-}
-
-httpd_handler_t *httpd_HandlerNew (httpd_host_t *host, const char *url,
-                                   const char *login, const char *password,
-                                   httpd_handler_callback_t cb,
-                                   httpd_handler_sys_t *data)
-{
-    (void) host; (void) url;
-    (void) login; (void) password;
-    (void) cb; (void) data;
-    assert (0);
-}
-
-void httpd_HostDelete (httpd_host_t *h)
-{
-    (void) h;
-    assert (0);
-}
-
-httpd_host_t *vlc_http_HostNew (vlc_object_t *obj)
-{
-    msg_Err (obj, "HTTP server not compiled-in!");
-    return NULL;
-}
-
-httpd_host_t *vlc_https_HostNew (vlc_object_t *obj)
-{
-    msg_Err (obj, "HTTPS server not compiled-in!");
-    return NULL;
-}
-
-httpd_host_t *vlc_rtsp_HostNew (vlc_object_t *obj)
-{
-    msg_Err (obj, "RTSP server not compiled-in!");
-    return NULL;
-}
-
-void httpd_MsgAdd (httpd_message_t *m, const char *name, const char *fmt, ...)
-{
-    (void) m; (void) name; (void) fmt;
-    assert (0);
-}
-
-const char *httpd_MsgGet (const httpd_message_t *m, const char *name)
-{
-    (void) m; (void) name;
-    assert (0);
-}
-
-void httpd_RedirectDelete (httpd_redirect_t *r)
-{
-    (void) r;
-    assert (0);
-}
-
-httpd_redirect_t *httpd_RedirectNew (httpd_host_t *host,
-                                     const char *dst, const char *src)
-{
-    (void) host; (void) dst; (void) src;
-    assert (0);
-}
-
-char *httpd_ServerIP (const httpd_client_t *client, char *ip, int *port)
-{
-    (void) client; (void) ip; (void) port;
-    assert (0);
-}
-
-void httpd_StreamDelete (httpd_stream_t *stream)
-{
-    (void) stream;
-    assert (0);
-}
-
-int httpd_StreamHeader (httpd_stream_t *stream, uint8_t *data, int count)
-{
-    (void) stream; (void) data; (void) count;
-    assert (0);
-}
-
-httpd_stream_t *httpd_StreamNew (httpd_host_t *host,
-                                 const char *url, const char *content_type,
-                                 const char *login, const char *password)
-{
-    (void) host; (void) url; (void) content_type;
-    (void) login; (void) password;
-    assert (0);
-}
-
-int httpd_StreamSend (httpd_stream_t *stream, const block_t *p_block)
-{
-    (void) stream; (void) p_block;
-    assert (0);
-}
-
-int httpd_UrlCatch (httpd_url_t *url, int request, httpd_callback_t cb,
-                    httpd_callback_sys_t *data)
-{
-    (void) url; (void) request; (void) cb; (void) data;
-    assert (0);
-}
-
-void httpd_UrlDelete (httpd_url_t *url)
-{
-    (void) url;
-    assert (0);
-}
-
-httpd_url_t *httpd_UrlNew (httpd_host_t *host, const char *url,
-                           const char *login, const char *password)
-{
-    (void) host; (void) url; (void) login; (void) password;
-    assert (0);
-}
-#endif /* !ENABLE_HTTPD */
-
 #ifndef ENABLE_SOUT
 # include <vlc_sout.h>
 
-char *sdp_AddMedia (char **sdp, const char *type, const char *protocol,
+void sdp_AddMedia (struct vlc_memstream *sdp, const char *type, const char *protocol,
                     int dport, unsigned pt, bool bw_indep, unsigned bw,
                     const char *ptname, unsigned clockrate, unsigned channels,
                     const char *fmtp)
 {
-    assert (*sdp == NULL);
-    return NULL;
+    VLC_UNUSED (sdp); VLC_UNUSED (type); VLC_UNUSED (protocol);
+    VLC_UNUSED (dport); VLC_UNUSED (pt); VLC_UNUSED (bw_indep);
+    VLC_UNUSED (bw); VLC_UNUSED (ptname); VLC_UNUSED (clockrate);
+    VLC_UNUSED (channels); VLC_UNUSED (fmtp);
+    assert (sdp == NULL);
 }
 
-char *sdp_AddAttribute (char **sdp, const char *name, const char *fmt, ...)
+void sdp_AddAttribute (struct vlc_memstream *sdp, const char *name, const char *fmt, ...)
 {
-    assert (*sdp == NULL);
-    return NULL;
+    VLC_UNUSED (sdp); VLC_UNUSED (name); VLC_UNUSED (fmt);
+    assert (sdp == NULL);
 }
 
 int sout_AccessOutControl (sout_access_out_t *out, int query, ...)
 {
-    assert (0);
+    VLC_UNUSED (out); VLC_UNUSED (query);
+    vlc_assert_unreachable ();
 }
 
 void sout_AccessOutDelete (sout_access_out_t *out)
 {
-    assert (0);
+    VLC_UNUSED (out);
+    vlc_assert_unreachable ();
 }
 
 #undef sout_AccessOutNew
 sout_access_out_t *sout_AccessOutNew (vlc_object_t *obj,
                                       const char *access, const char *name)
 {
+    VLC_UNUSED (access); VLC_UNUSED (name);
     msg_Err (obj, "Output support not compiled-in!");
     return NULL;
 }
 
 ssize_t sout_AccessOutRead (sout_access_out_t *out, block_t *block)
 {
-    assert (0);
+    VLC_UNUSED (out); VLC_UNUSED (block);
+    vlc_assert_unreachable ();
 }
 
 int sout_AccessOutSeek (sout_access_out_t *out, off_t offset)
 {
-    assert (0);
+    VLC_UNUSED (out); VLC_UNUSED (offset);
+    vlc_assert_unreachable ();
 }
 
 ssize_t sout_AccessOutWrite (sout_access_out_t *out, block_t *block)
 {
-    assert (0);
+    VLC_UNUSED (out); VLC_UNUSED (block);
+    vlc_assert_unreachable ();
 }
 
 #undef sout_AnnounceRegisterSDP
@@ -244,14 +103,16 @@ session_descriptor_t *sout_AnnounceRegisterSDP (vlc_object_t *obj,
                                                 const char *sdp,
                                                 const char *dst)
 {
+    VLC_UNUSED (sdp); VLC_UNUSED (dst);
     msg_Err (obj, "SDP export not compiled-in!");
     return NULL;
 }
 
 #undef sout_AnnounceUnRegister
-sout_AnnounceUnRegister (vlc_object_t *obj, session_descriptor_t *d)
+void sout_AnnounceUnRegister (vlc_object_t *obj, session_descriptor_t *d)
 {
-    assert (0);
+    VLC_UNUSED (obj); VLC_UNUSED (d);
+    vlc_assert_unreachable ();
 }
 
 #undef sout_EncoderCreate
@@ -261,54 +122,71 @@ encoder_t *sout_EncoderCreate( vlc_object_t *p_this )
     return NULL;
 }
 
-sout_input_t *sout_MuxAddStream (sout_mux_t *mux, es_format_t *fmt)
+sout_input_t *sout_MuxAddStream( sout_mux_t *mux, const es_format_t *fmt )
 {
-    assert (0);
+    VLC_UNUSED (mux); VLC_UNUSED (fmt);
+    vlc_assert_unreachable ();
 }
 
 void sout_MuxDelete (sout_mux_t *mux)
 {
-    assert (0);
+    VLC_UNUSED (mux);
+    vlc_assert_unreachable ();
 }
 
 void sout_MuxDeleteStream (sout_mux_t *mux, sout_input_t *input)
 {
-    assert (0);
+    VLC_UNUSED (mux); VLC_UNUSED (input);
+    vlc_assert_unreachable ();
 }
 
-int sout_MuxGetStream (sout_mux_t *p_mux, int i_blocks, mtime_t *pi_dts)
+int sout_MuxGetStream (sout_mux_t *p_mux, unsigned int i_blocks, mtime_t *pi_dts)
 {
-    assert (0);
+    VLC_UNUSED (p_mux); VLC_UNUSED (i_blocks); VLC_UNUSED (pi_dts);
+    vlc_assert_unreachable ();
 }
 
 sout_mux_t *sout_MuxNew (sout_instance_t *instance, const char *mux,
                          sout_access_out_t *out)
 {
-    assert (0);
+    VLC_UNUSED (instance); VLC_UNUSED (mux); VLC_UNUSED (out);
+    vlc_assert_unreachable ();
 }
 
-void sout_MuxSendBuffer (sout_mux_t *mux, sout_input_t *input, block_t *block)
+int sout_MuxSendBuffer (sout_mux_t *mux, sout_input_t *input, block_t *block)
 {
-    assert (0);
+    VLC_UNUSED (mux); VLC_UNUSED (input); VLC_UNUSED (block);
+    vlc_assert_unreachable ();
+}
+
+void sout_MuxFlush( sout_mux_t *mux, sout_input_t *input )
+{
+    VLC_UNUSED (mux); VLC_UNUSED (input);
+    vlc_assert_unreachable ();
 }
 
 void sout_StreamChainDelete (sout_stream_t *p_first, sout_stream_t *p_last)
 {
-    assert (0);
+    VLC_UNUSED (p_first); VLC_UNUSED (p_last);
+    vlc_assert_unreachable ();
 }
 
-sout_stream_t *sout_StreamChainNew (sout_instance_t *p_sout, char *psz_chain,
+sout_stream_t *sout_StreamChainNew (sout_instance_t *p_sout, const char *psz_chain,
                                     sout_stream_t *p_next,
                                     sout_stream_t **pp_last)
 {
-    assert (0);
+    VLC_UNUSED (p_sout); VLC_UNUSED (psz_chain); VLC_UNUSED (p_next);
+    VLC_UNUSED (pp_last);
+    vlc_assert_unreachable ();
 }
 
-char *vlc_sdp_Start (vlc_object_t *obj, const char *cfg,
+int vlc_sdp_Start (struct vlc_memstream *sdp, vlc_object_t *obj, const char *cfg,
                      const struct sockaddr *src, size_t srclen,
                      const struct sockaddr *addr, size_t addrlen)
 {
-    return NULL;
+    VLC_UNUSED (obj); VLC_UNUSED (cfg); VLC_UNUSED (src); VLC_UNUSED (srclen);
+    VLC_UNUSED (addr); VLC_UNUSED (addrlen);
+    return 0;
 }
 #endif /* !ENABLE_SOUT */
 
@@ -317,14 +195,15 @@ char *vlc_sdp_Start (vlc_object_t *obj, const char *cfg,
 
 int vlm_Control (vlm_t *vlm, int query, ...)
 {
+    VLC_UNUSED (query);
     VLC_UNUSED (vlm);
-    assert (0);
+    vlc_assert_unreachable ();
 }
 
 void vlm_Delete (vlm_t *vlm)
 {
     VLC_UNUSED (vlm);
-    assert (0);
+    vlc_assert_unreachable ();
 }
 
 int vlm_ExecuteCommand (vlm_t *vlm, const char *cmd, vlm_message_t **pm)
@@ -332,20 +211,20 @@ int vlm_ExecuteCommand (vlm_t *vlm, const char *cmd, vlm_message_t **pm)
     VLC_UNUSED (vlm);
     VLC_UNUSED (cmd);
     VLC_UNUSED (pm);
-    assert (0);
+    vlc_assert_unreachable ();
 }
 
 vlm_message_t *vlm_MessageAdd (vlm_message_t *a, vlm_message_t *b)
 {
     VLC_UNUSED (a);
     VLC_UNUSED (b);
-    assert (0);
+    vlc_assert_unreachable ();
 }
 
 void vlm_MessageDelete (vlm_message_t *m)
 {
     VLC_UNUSED (m);
-    assert (0);
+    vlc_assert_unreachable ();
 }
 
 vlm_message_t *vlm_MessageSimpleNew (const char *a)
@@ -368,3 +247,43 @@ vlm_t *vlm_New (vlc_object_t *obj)
      return NULL;
 }
 #endif /* !ENABLE_VLM */
+
+#ifndef UPDATE_CHECK
+# include <vlc_update.h>
+
+update_t *(update_New)(vlc_object_t *obj)
+{
+    (void) obj;
+    return NULL;
+}
+
+void update_Delete(update_t *u)
+{
+    (void) u;
+    vlc_assert_unreachable();
+}
+
+void update_Check(update_t *u, void (*cb)(void *, bool), void *opaque)
+{
+    (void) u; (void) cb; (void) opaque;
+    vlc_assert_unreachable();
+}
+
+bool update_NeedUpgrade(update_t *u)
+{
+    (void) u;
+    vlc_assert_unreachable();
+}
+
+void update_Download(update_t *u, const char *dir)
+{
+    (void) u; (void) dir;
+    vlc_assert_unreachable();
+}
+
+update_release_t *update_GetRelease(update_t *u)
+{
+    (void) u;
+    vlc_assert_unreachable();
+}
+#endif /* !UPDATE_CHECK */

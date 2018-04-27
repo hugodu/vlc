@@ -1,15 +1,15 @@
 # fontconfig
 
-FONTCONFIG_VERSION := 2.10.2
-FONTCONFIG_URL := http://fontconfig.org/release/fontconfig-$(FONTCONFIG_VERSION).tar.gz
+FONTCONFIG_VERSION := 2.12.3
+FONTCONFIG_URL := https://www.freedesktop.org/software/fontconfig/release/fontconfig-$(FONTCONFIG_VERSION).tar.gz
 
 PKGS += fontconfig
-ifeq ($(call need_pkg,"fontconfig"),)
+ifeq ($(call need_pkg,"fontconfig >= 2.11"),)
 PKGS_FOUND += fontconfig
 endif
 
 $(TARBALLS)/fontconfig-$(FONTCONFIG_VERSION).tar.gz:
-	$(call download,$(FONTCONFIG_URL))
+	$(call download_pkg,$(FONTCONFIG_URL),fontconfig)
 
 .sum-fontconfig: fontconfig-$(FONTCONFIG_VERSION).tar.gz
 
@@ -19,6 +19,8 @@ ifdef HAVE_WIN32
 	$(APPLY) $(SRC)/fontconfig/fontconfig-win32.patch
 	$(APPLY) $(SRC)/fontconfig/fontconfig-noxml2.patch
 endif
+	$(RM) $(UNPACK_DIR)/src/fcobjshash.gperf
+	$(call pkg_static, "fontconfig.pc.in")
 	$(MOVE)
 
 FONTCONFIG_CONF := $(HOSTCONF) \
@@ -46,6 +48,10 @@ FONTCONFIG_ENV += LIBXML2_CFLAGS=`xml2-config --cflags`
 FONTCONFIG_ENV += LIBXML2_LIBS=`xml2-config --libs`
 endif
 
+ifdef HAVE_NACL
+FONTCONFIG_ENV += ac_cv_func_random=no
+endif
+
 DEPS_fontconfig = freetype2 $(DEPS_freetype2) libxml2 $(DEPS_libxml2)
 
 .fontconfig: fontconfig
@@ -58,7 +64,7 @@ ifndef HAVE_MACOSX
 	cd $< && $(MAKE) install
 else
 	cd $< && $(MAKE) install-exec
-	cd $</fontconfig && $(MAKE) install-data
+	cd $< && $(MAKE) -C fontconfig install-data
 	sed -e 's%/usr/lib/libiconv.la%%' -i.orig $(PREFIX)/lib/libfontconfig.la
 	cp $</fontconfig.pc $(PREFIX)/lib/pkgconfig/
 endif

@@ -28,15 +28,12 @@
 #include <vlc_common.h>
 #include <vlc_codec.h>
 
-#define BLOCK_FLAG_CORE_FLUSH (1 <<BLOCK_FLAG_CORE_PRIVATE_SHIFT)
-#define BLOCK_FLAG_CORE_EOS   (1 <<(BLOCK_FLAG_CORE_PRIVATE_SHIFT + 1))
-
 decoder_t *input_DecoderNew( input_thread_t *, es_format_t *, input_clock_t *,
                              sout_instance_t * ) VLC_USED;
 
 /**
  * This function changes the pause state.
- * The date parameter MUST hold the exact date at wich the change has been
+ * The date parameter MUST hold the exact date at which the change has been
  * done for proper vout/aout pausing.
  */
 void input_DecoderChangePause( decoder_t *, bool b_paused, mtime_t i_date );
@@ -47,19 +44,19 @@ void input_DecoderChangePause( decoder_t *, bool b_paused, mtime_t i_date );
 void input_DecoderChangeDelay( decoder_t *, mtime_t i_delay );
 
 /**
- * This function starts the buffering mode.
+ * This function makes the decoder start waiting for a valid data block from its fifo.
  */
-void input_DecoderStartBuffering( decoder_t * );
+void input_DecoderStartWait( decoder_t * );
 
 /**
- * This function waits for the decoder to have buffered sufficient data.
+ * This function waits for the decoder to actually receive data.
  */
-void input_DecoderWaitBuffering( decoder_t * );
+void input_DecoderWait( decoder_t * );
 
 /**
- * This function stops the buffering mode.
+ * This function exits the waiting mode of the decoder.
  */
-void input_DecoderStopBuffering( decoder_t * );
+void input_DecoderStopWait( decoder_t * );
 
 /**
  * This function returns true if the decoder fifo is empty and false otherwise.
@@ -69,19 +66,18 @@ bool input_DecoderIsEmpty( decoder_t * );
 /**
  * This function activates the request closed caption channel.
  */
-int input_DecoderSetCcState( decoder_t *, bool b_decode, int i_channel );
+int input_DecoderSetCcState( decoder_t *, vlc_fourcc_t, int i_channel, bool b_decode );
 
 /**
  * This function returns an error if the requested channel does not exist and
  * set pb_decode to the channel status(active or not) otherwise.
  */
-int input_DecoderGetCcState( decoder_t *, bool *pb_decode, int i_channel );
+int input_DecoderGetCcState( decoder_t *, vlc_fourcc_t, int i_channel, bool *pb_decode );
 
 /**
- * This function set each pb_present entry to true if the corresponding channel
- * exists or false otherwise.
+ * This function get cc channels descriptions
  */
-void input_DecoderIsCcPresent( decoder_t *, bool pb_present[4] );
+void input_DecoderGetCcDesc( decoder_t *, decoder_cc_desc_t * );
 
 /**
  * This function force the display of the next picture and fills the stream

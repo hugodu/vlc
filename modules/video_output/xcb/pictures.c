@@ -26,6 +26,7 @@
 
 #include <stdlib.h>
 #include <assert.h>
+#include <errno.h>
 
 #include <sys/types.h>
 #ifdef HAVE_SYS_SHM_H
@@ -90,7 +91,8 @@ int XCB_picture_Alloc (vout_display_t *vd, picture_resource_t *res,
     int id = shmget (IPC_PRIVATE, size, IPC_CREAT | S_IRWXU);
     if (id == -1)
     {
-        msg_Err (vd, "shared memory allocation error: %m");
+        msg_Err (vd, "shared memory allocation error: %s",
+                 vlc_strerror_c(errno));
         return -1;
     }
 
@@ -98,7 +100,8 @@ int XCB_picture_Alloc (vout_display_t *vd, picture_resource_t *res,
     void *shm = shmat (id, NULL, 0 /* read/write */);
     if (-1 == (intptr_t)shm)
     {
-        msg_Err (vd, "shared memory attachment error: %m");
+        msg_Err (vd, "shared memory attachment error: %s",
+                 vlc_strerror_c(errno));
         shmctl (id, IPC_RMID, 0);
         return -1;
     }
@@ -106,8 +109,8 @@ int XCB_picture_Alloc (vout_display_t *vd, picture_resource_t *res,
     if (segment != 0)
     {   /* Attach the segment to X */
         xcb_void_cookie_t ck = xcb_shm_attach_checked (conn, segment, id, 1);
-        switch (XCB_error_Check (vd, conn, "shared memory server-side error",
-                                 ck))
+        switch (vlc_xcb_error_Check(vd, conn,
+                                    "shared memory server-side error", ck))
         {
             case 0:
                 break;
@@ -120,10 +123,10 @@ int XCB_picture_Alloc (vout_display_t *vd, picture_resource_t *res,
                 buf.shm_perm.mode |= S_IRGRP|S_IROTH;
                 shmctl (id, IPC_SET, &buf);
                 ck = xcb_shm_attach_checked (conn, segment, id, 1);
-                if (XCB_error_Check (vd, conn, "same error on retry", ck) == 0)
+                if (vlc_xcb_error_Check(vd, conn, "same error on retry",
+                                        ck) == 0)
                     break;
-                /* fall through */
-            }
+            }   /* fall through */
 
             default:
                 msg_Info (vd, "using buggy X11 server - SSH proxying?");
@@ -147,10 +150,17 @@ int XCB_picture_Alloc (vout_display_t *vd, picture_resource_t *res,
 }
 
 picture_t *XCB_picture_NewFromResource (const video_format_t *restrict fmt,
-                                        const picture_resource_t *restrict res)
+                                        const picture_resource_t *restrict res,
+                                        xcb_connection_t *conn)
 {
     picture_t *pic = picture_NewFromResource (fmt, res);
     if (unlikely(pic == NULL))
+    {
+        xcb_shm_seg_t seg = (uintptr_t)res->p_sys;
+
+        if (seg != 0)
+            xcb_shm_detach (conn, seg);
         shmdt (res->p[0].p_pixels);
+    }
     return pic;
 }

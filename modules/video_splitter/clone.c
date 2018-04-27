@@ -57,11 +57,11 @@ vlc_module_begin ()
     set_shortname( N_("Clone" ))
     set_help(CLONE_HELP)
     set_category( CAT_VIDEO )
-    set_subcategory( SUBCAT_VIDEO_VFILTER )
+    set_subcategory( SUBCAT_VIDEO_SPLITTER )
 
     add_integer( CFG_PREFIX "count", 2, COUNT_TEXT, COUNT_LONGTEXT, false )
-    add_module_list( CFG_PREFIX "vout-list", "vout display", NULL,
-                     VOUTLIST_TEXT, VOUTLIST_LONGTEXT, true )
+    add_module_list(CFG_PREFIX "vout-list", "vout display", NULL,
+                    VOUTLIST_TEXT, VOUTLIST_LONGTEXT)
 
     add_shortcut( "clone" )
     set_callbacks( Open, Close )

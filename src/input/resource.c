@@ -28,10 +28,10 @@
 # include "config.h"
 #endif
 
+#include <stdatomic.h>
 #include <assert.h>
 
 #include <vlc_common.h>
-#include <vlc_atomic.h>
 #include <vlc_vout.h>
 #include <vlc_spu.h>
 #include <vlc_aout.h>
@@ -61,7 +61,7 @@ struct input_resource_t
 
     /* This lock is used to protect vout resources access (for hold)
      * It is a special case because of embed video (possible deadlock
-     * between vout window request and vout holds in some(qt4) interface)
+     * between vout window request and vout holds in some(qt) interface)
      */
     vlc_mutex_t    lock_hold;
 
@@ -92,8 +92,10 @@ static sout_instance_t *RequestSout( input_resource_t *p_resource,
     if( !p_sout && !psz_sout )
     {
         if( p_resource->p_sout )
+        {
             msg_Dbg( p_resource->p_sout, "destroying useless sout" );
-        DestroySout( p_resource );
+            DestroySout( p_resource );
+        }
         return NULL;
     }
 
@@ -132,6 +134,7 @@ static sout_instance_t *RequestSout( input_resource_t *p_resource,
         return NULL;
     }
 #else
+    VLC_UNUSED (p_resource); VLC_UNUSED (p_sout); VLC_UNUSED (psz_sout);
     return NULL;
 #endif
 }
@@ -157,7 +160,7 @@ static void DisplayVoutTitle( input_resource_t *p_resource,
 
     input_item_t *p_item = input_GetItem( p_resource->p_input );
 
-    char *psz_nowplaying = input_item_GetNowPlaying( p_item );
+    char *psz_nowplaying = input_item_GetNowPlayingFb( p_item );
     if( psz_nowplaying && *psz_nowplaying )
     {
         vout_DisplayTitle( p_vout, psz_nowplaying );
@@ -192,7 +195,7 @@ static void DisplayVoutTitle( input_resource_t *p_resource,
 }
 static vout_thread_t *RequestVout( input_resource_t *p_resource,
                                    vout_thread_t *p_vout,
-                                   video_format_t *p_fmt, unsigned dpb_size,
+                                   const video_format_t *p_fmt, unsigned dpb_size,
                                    bool b_recycle )
 {
     vlc_assert_locked( &p_resource->lock );
@@ -240,6 +243,11 @@ static vout_thread_t *RequestVout( input_resource_t *p_resource,
             return NULL;
 
         DisplayVoutTitle( p_resource, p_vout );
+
+        /* Send original viewpoint to the input in order to update other ESes */
+        if( p_resource->p_input != NULL )
+            input_Control( p_resource->p_input, INPUT_SET_INITIAL_VIEWPOINT,
+                           &p_fmt->pose );
 
         vlc_mutex_lock( &p_resource->lock_hold );
         TAB_APPEND( p_resource->i_vout, p_resource->pp_vout, p_vout );
@@ -307,7 +315,7 @@ static void HoldVouts( input_resource_t *p_resource, vout_thread_t ***ppp_vout,
     if( p_resource->i_vout <= 0 )
         goto exit;
 
-    pp_vout = malloc( p_resource->i_vout * sizeof(*pp_vout) );
+    pp_vout = vlc_alloc( p_resource->i_vout, sizeof(*pp_vout) );
     if( !pp_vout )
         goto exit;
 
@@ -329,33 +337,31 @@ audio_output_t *input_resource_GetAout( input_resource_t *p_resource )
 {
     audio_output_t *p_aout;
 
-    vlc_mutex_lock( &p_resource->lock );
-    if( p_resource->b_aout_busy )
-    {
-        vlc_mutex_unlock( &p_resource->lock );
-        msg_Dbg( p_resource->p_parent, "creating extra audio output" );
-        return aout_New( p_resource->p_parent );
-    }
-
+    vlc_mutex_lock( &p_resource->lock_hold );
     p_aout = p_resource->p_aout;
-    if( p_aout == NULL )
+
+    if( p_aout == NULL || p_resource->b_aout_busy )
     {
         msg_Dbg( p_resource->p_parent, "creating audio output" );
+        vlc_mutex_unlock( &p_resource->lock_hold );
+
         p_aout = aout_New( p_resource->p_parent );
+        if( p_aout == NULL )
+            return NULL; /* failed */
+
+        vlc_mutex_lock( &p_resource->lock_hold );
+        if( p_resource->p_aout == NULL )
+            p_resource->p_aout = p_aout;
     }
     else
         msg_Dbg( p_resource->p_parent, "reusing audio output" );
 
-    if( p_aout != NULL )
+    if( p_resource->p_aout == p_aout )
     {
-        vlc_mutex_lock( &p_resource->lock_hold );
-        p_resource->p_aout = p_aout;
-        vlc_mutex_unlock( &p_resource->lock_hold );
-
+        assert( !p_resource->b_aout_busy );
         p_resource->b_aout_busy = true;
-        vlc_object_hold( p_aout );
     }
-    vlc_mutex_unlock( &p_resource->lock );
+    vlc_mutex_unlock( &p_resource->lock_hold );
     return p_aout;
 }
 
@@ -364,18 +370,17 @@ void input_resource_PutAout( input_resource_t *p_resource,
 {
     assert( p_aout != NULL );
 
-    vlc_mutex_lock( &p_resource->lock );
+    vlc_mutex_lock( &p_resource->lock_hold );
     if( p_aout == p_resource->p_aout )
     {
         assert( p_resource->b_aout_busy );
         p_resource->b_aout_busy = false;
         msg_Dbg( p_resource->p_parent, "keeping audio output" );
-        vlc_object_release( p_aout );
         p_aout = NULL;
     }
     else
         msg_Dbg( p_resource->p_parent, "destroying extra audio output" );
-    vlc_mutex_unlock( &p_resource->lock );
+    vlc_mutex_unlock( &p_resource->lock_hold );
 
     if( p_aout != NULL )
         aout_Destroy( p_aout );
@@ -387,24 +392,24 @@ audio_output_t *input_resource_HoldAout( input_resource_t *p_resource )
 
     vlc_mutex_lock( &p_resource->lock_hold );
     p_aout = p_resource->p_aout;
-    if( p_aout )
+    if( p_aout != NULL )
         vlc_object_hold( p_aout );
     vlc_mutex_unlock( &p_resource->lock_hold );
 
     return p_aout;
 }
 
-static void input_resource_TerminateAout( input_resource_t *p_resource )
+void input_resource_ResetAout( input_resource_t *p_resource )
 {
-    audio_output_t *p_aout;
+    audio_output_t *p_aout = NULL;
 
-    vlc_mutex_lock( &p_resource->lock );
     vlc_mutex_lock( &p_resource->lock_hold );
-    p_aout = p_resource->p_aout;
+    if( !p_resource->b_aout_busy )
+        p_aout = p_resource->p_aout;
+
     p_resource->p_aout = NULL;
-    vlc_mutex_unlock( &p_resource->lock_hold );
     p_resource->b_aout_busy = false;
-    vlc_mutex_unlock( &p_resource->lock );
+    vlc_mutex_unlock( &p_resource->lock_hold );
 
     if( p_aout != NULL )
         aout_Destroy( p_aout );
@@ -460,7 +465,7 @@ void input_resource_SetInput( input_resource_t *p_resource, input_thread_t *p_in
 
 vout_thread_t *input_resource_RequestVout( input_resource_t *p_resource,
                                             vout_thread_t *p_vout,
-                                            video_format_t *p_fmt, unsigned dpb_size,
+                                            const video_format_t *p_fmt, unsigned dpb_size,
                                             bool b_recycle )
 {
     vlc_mutex_lock( &p_resource->lock );
@@ -511,7 +516,7 @@ void input_resource_TerminateSout( input_resource_t *p_resource )
 void input_resource_Terminate( input_resource_t *p_resource )
 {
     input_resource_TerminateSout( p_resource );
-    input_resource_TerminateAout( p_resource );
+    input_resource_ResetAout( p_resource );
     input_resource_TerminateVout( p_resource );
 }
 

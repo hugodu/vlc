@@ -155,8 +155,9 @@ static int Open( vlc_object_t *p_this )
 static void Close( vlc_object_t *p_this )
 {
     filter_t *p_filter = (filter_t *)p_this;
-    free( p_filter->p_sys->p_state );
-    free( p_filter->p_sys );
+    filter_sys_t *p_sys = p_filter->p_sys;
+    free( p_sys->p_state );
+    free( p_sys );
 }
 
 /*****************************************************************************
@@ -166,10 +167,11 @@ static void Close( vlc_object_t *p_this )
  *****************************************************************************/
 static block_t *DoWork( filter_t * p_filter, block_t * p_in_buf )
 {
+    filter_sys_t *p_sys = p_filter->p_sys;
     ProcessEQ( (float*)p_in_buf->p_buffer, (float*)p_in_buf->p_buffer,
-               p_filter->p_sys->p_state,
+               p_sys->p_state,
                p_filter->fmt_in.audio.i_channels, p_in_buf->i_nb_samples,
-               p_filter->p_sys->coeffs, 5 );
+               p_sys->coeffs, 5 );
     return p_in_buf;
 }
 
@@ -200,15 +202,15 @@ static void CalcPeakEQCoeffs( float f0, float Q, float gainDB, float Fs,
     if (gainDB < -40) gainDB = -40;
     if (gainDB > 40) gainDB = 40;
  
-    A = pow(10, gainDB/40);
-    w0 = 2*3.141593f*f0/Fs;
-    alpha = sin(w0)/(2*Q);
+    A = powf(10, gainDB/40);
+    w0 = 2*((float)M_PI)*f0/Fs;
+    alpha = sinf(w0)/(2*Q);
  
     b0 = 1 + alpha*A;
-    b1 = -2*cos(w0);
+    b1 = -2*cosf(w0);
     b2 = 1 - alpha*A;
     a0 = 1 + alpha/A;
-    a1 = -2*cos(w0);
+    a1 = -2*cosf(w0);
     a2 = 1 - alpha/A;
  
     // Store values to coeffs and normalize by 1/a0
@@ -244,27 +246,27 @@ static void CalcShelfEQCoeffs( float f0, float slope, float gainDB, int high,
     if (gainDB < -40) gainDB = -40;
     if (gainDB > 40) gainDB = 40;
 
-    A = pow(10, gainDB/40);
+    A = powf(10, gainDB/40);
     w0 = 2*3.141593f*f0/Fs;
-    alpha = sin(w0)/2 * sqrt( (A + 1/A)*(1/slope - 1) + 2 );
+    alpha = sinf(w0)/2 * sqrtf( (A + 1/A)*(1/slope - 1) + 2 );
 
     if (high)
     {
-        b0 =    A*( (A+1) + (A-1)*cos(w0) + 2*sqrt(A)*alpha );
-        b1 = -2*A*( (A-1) + (A+1)*cos(w0) );
-        b2 =    A*( (A+1) + (A-1)*cos(w0) - 2*sqrt(A)*alpha );
-        a0 =        (A+1) - (A-1)*cos(w0) + 2*sqrt(A)*alpha;
-        a1 =    2*( (A-1) - (A+1)*cos(w0) );
-        a2 =        (A+1) - (A-1)*cos(w0) - 2*sqrt(A)*alpha;
+        b0 =    A*( (A+1) + (A-1)*cosf(w0) + 2*sqrtf(A)*alpha );
+        b1 = -2*A*( (A-1) + (A+1)*cosf(w0) );
+        b2 =    A*( (A+1) + (A-1)*cosf(w0) - 2*sqrtf(A)*alpha );
+        a0 =        (A+1) - (A-1)*cosf(w0) + 2*sqrtf(A)*alpha;
+        a1 =    2*( (A-1) - (A+1)*cosf(w0) );
+        a2 =        (A+1) - (A-1)*cosf(w0) - 2*sqrtf(A)*alpha;
     }
     else
     {
-        b0 =    A*( (A+1) - (A-1)*cos(w0) + 2*sqrt(A)*alpha );
-        b1 =  2*A*( (A-1) - (A+1)*cos(w0));
-        b2 =    A*( (A+1) - (A-1)*cos(w0) - 2*sqrt(A)*alpha );
-        a0 =        (A+1) + (A-1)*cos(w0) + 2*sqrt(A)*alpha;
-        a1 =   -2*( (A-1) + (A+1)*cos(w0));
-        a2 =        (A+1) + (A-1)*cos(w0) - 2*sqrt(A)*alpha;
+        b0 =    A*( (A+1) - (A-1)*cosf(w0) + 2*sqrtf(A)*alpha );
+        b1 =  2*A*( (A-1) - (A+1)*cosf(w0));
+        b2 =    A*( (A+1) - (A-1)*cosf(w0) - 2*sqrtf(A)*alpha );
+        a0 =        (A+1) + (A-1)*cosf(w0) + 2*sqrtf(A)*alpha;
+        a1 =   -2*( (A-1) + (A+1)*cosf(w0));
+        a2 =        (A+1) + (A-1)*cosf(w0) - 2*sqrtf(A)*alpha;
     }
     // Store values to coeffs and normalize by 1/a0
     coeffs[0] = b0/a0;

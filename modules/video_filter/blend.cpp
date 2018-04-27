@@ -28,10 +28,10 @@
 # include "config.h"
 #endif
 
-#include <assert.h>
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_filter.h>
+#include <vlc_picture.h>
 #include "filter_picture.h"
 
 /*****************************************************************************
@@ -268,9 +268,15 @@ public:
     CPictureRGBX(const CPicture &cfg) : CPicture(cfg)
     {
         if (has_alpha) {
-            offset_r = 0;
-            offset_g = 1;
-            offset_b = 2;
+            if (fmt->i_chroma == VLC_CODEC_BGRA) {
+                offset_r = 2;
+                offset_g = 1;
+                offset_b = 0;
+            } else {
+                offset_r = 0;
+                offset_g = 1;
+                offset_b = 2;
+            }
             offset_a = 3;
         } else {
 #ifdef WORDS_BIGENDIAN
@@ -297,9 +303,29 @@ public:
     void merge(unsigned dx, const CPixel &spx, unsigned a, bool)
     {
         uint8_t *dst = getPointer(dx);
-        ::merge(&dst[offset_r], spx.i, a);
-        ::merge(&dst[offset_g], spx.j, a);
-        ::merge(&dst[offset_b], spx.k, a);
+        if (has_alpha) {
+            // Handle different cases of existing alpha in the
+            // destination buffer. If the existing alpha is 0,
+            // the RGB components should be copied as is and
+            // alpha set to 'a'. If the existing alpha is 255,
+            // this should behave just as the non-alpha case below.
+
+            // First blend the existing color based on its
+            // alpha with the incoming color.
+            ::merge(&dst[offset_r], spx.i, 255 - dst[offset_a]);
+            ::merge(&dst[offset_g], spx.j, 255 - dst[offset_a]);
+            ::merge(&dst[offset_b], spx.k, 255 - dst[offset_a]);
+            // Now blend in the new color on top with the normal formulas.
+            ::merge(&dst[offset_r], spx.i, a);
+            ::merge(&dst[offset_g], spx.j, a);
+            ::merge(&dst[offset_b], spx.k, a);
+            // Finally set dst_a = (255 * src_a + prev_a * (255 - src_a))/255.
+            ::merge(&dst[offset_a], 255, a);
+        } else {
+            ::merge(&dst[offset_r], spx.i, a);
+            ::merge(&dst[offset_g], spx.j, a);
+            ::merge(&dst[offset_b], spx.k, a);
+        }
     }
     void nextLine()
     {
@@ -383,6 +409,7 @@ typedef CPictureYUVPacked<0, 3, 1> CPictureYVYU;
 typedef CPictureYUVPacked<1, 2, 0> CPictureVYUY;
 
 typedef CPictureRGBX<4, true>  CPictureRGBA;
+typedef CPictureRGBX<4, true>  CPictureBGRA;
 typedef CPictureRGBX<4, false> CPictureRGB32;
 typedef CPictureRGBX<3, false> CPictureRGB24;
 
@@ -405,6 +432,7 @@ struct convertBits {
 };
 typedef convertBits< 9, 8> convert8To9Bits;
 typedef convertBits<10, 8> convert8To10Bits;
+typedef convertBits<16, 8> convert8To16Bits;
 
 struct convertRgbToYuv8 {
     convertRgbToYuv8(const video_format_t *, const video_format_t *) {}
@@ -543,6 +571,8 @@ static const struct {
     RGB(VLC_CODEC_RGB16,    CPictureRGB16,    convertRgbToRgbSmall),
     RGB(VLC_CODEC_RGB24,    CPictureRGB24,    convertNone),
     RGB(VLC_CODEC_RGB32,    CPictureRGB32,    convertNone),
+    RGB(VLC_CODEC_RGBA,     CPictureRGBA,     convertNone),
+    RGB(VLC_CODEC_BGRA,     CPictureBGRA,     convertNone),
 
     YUV(VLC_CODEC_YV9,      CPictureYV9,      convertNone),
     YUV(VLC_CODEC_I410,     CPictureI410_8,   convertNone),
@@ -567,9 +597,11 @@ static const struct {
 #ifdef WORDS_BIGENDIAN
     YUV(VLC_CODEC_I422_9B,  CPictureI422_16,  convert8To9Bits),
     YUV(VLC_CODEC_I422_10B, CPictureI422_16,  convert8To10Bits),
+    YUV(VLC_CODEC_I422_16B, CPictureI422_16,  convert8To16Bits),
 #else
     YUV(VLC_CODEC_I422_9L,  CPictureI422_16,  convert8To9Bits),
     YUV(VLC_CODEC_I422_10L, CPictureI422_16,  convert8To10Bits),
+    YUV(VLC_CODEC_I422_16L, CPictureI422_16,  convert8To16Bits),
 #endif
 
     YUV(VLC_CODEC_J444,     CPictureI444_8,   convertNone),
@@ -577,9 +609,11 @@ static const struct {
 #ifdef WORDS_BIGENDIAN
     YUV(VLC_CODEC_I444_9B,  CPictureI444_16,  convert8To9Bits),
     YUV(VLC_CODEC_I444_10B, CPictureI444_16,  convert8To10Bits),
+    YUV(VLC_CODEC_I444_16B, CPictureI444_16,  convert8To16Bits),
 #else
     YUV(VLC_CODEC_I444_9L,  CPictureI444_16,  convert8To9Bits),
     YUV(VLC_CODEC_I444_10L, CPictureI444_16,  convert8To10Bits),
+    YUV(VLC_CODEC_I444_16L, CPictureI444_16,  convert8To16Bits),
 #endif
 
     YUV(VLC_CODEC_YUYV,     CPictureYUYV,     convertNone),
@@ -605,7 +639,7 @@ static void Blend(filter_t *filter,
                   picture_t *dst, const picture_t *src,
                   int x_offset, int y_offset, int alpha)
 {
-    filter_sys_t *sys = filter->p_sys;
+    filter_sys_t *sys = reinterpret_cast<filter_sys_t *>( filter->p_sys );
 
     if( x_offset < 0 || y_offset < 0 )
     {
@@ -659,6 +693,7 @@ static int Open(vlc_object_t *object)
 static void Close(vlc_object_t *object)
 {
     filter_t *filter = (filter_t *)object;
-    delete filter->p_sys;
+    filter_sys_t *p_sys = reinterpret_cast<filter_sys_t *>( filter->p_sys );
+    delete p_sys;
 }
 

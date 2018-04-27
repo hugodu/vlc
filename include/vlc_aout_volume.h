@@ -25,14 +25,17 @@
 #ifndef VLC_AOUT_MIXER_H
 #define VLC_AOUT_MIXER_H 1
 
-/**
- * \file
- * This file defines functions, structures and macros for audio output mixer object
- */
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * \defgroup audio_volume Audio output volume
+ * \ingroup audio_output
+ * @{
+ * \file
+ * This file defines functions, structures and macros for audio output mixer object
+ */
 
 typedef struct audio_volume audio_volume_t;
 
@@ -41,11 +44,13 @@ typedef struct audio_volume audio_volume_t;
  */
 struct audio_volume
 {
-    VLC_COMMON_MEMBERS
+    struct vlc_common_members obj;
 
     vlc_fourcc_t format; /**< Audio samples format */
     void (*amplify)(audio_volume_t *, block_t *, float); /**< Amplifier */
 };
+
+/** @} */
 
 #ifdef __cplusplus
 }

@@ -1,26 +1,26 @@
 /*****************************************************************************
  * vod.c: rtsp VoD server module
  *****************************************************************************
- * Copyright (C) 2003-2006, 2010 the VideoLAN team
+ * Copyright (C) 2003-2006, 2010 VLC authors and VideoLAN
  * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Gildas Bazin <gbazin@videolan.org>
  *          Pierre Ynard
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 
 /*****************************************************************************
@@ -40,6 +40,7 @@
 #include <vlc_vod.h>
 #include <vlc_url.h>
 #include <vlc_network.h>
+#include <vlc_memstream.h>
 
 #include <assert.h>
 
@@ -127,7 +128,7 @@ int OpenVoD( vlc_object_t *p_this )
     else
     {
         vlc_url_t url;
-        vlc_UrlParse( &url, psz_url, 0 );
+        vlc_UrlParse( &url, psz_url );
         free( psz_url );
 
         if( url.psz_path == NULL )
@@ -314,15 +315,13 @@ static void MediaDel( vod_t *p_vod, vod_media_t *p_media )
         RtspUnsetup(p_media->rtsp);
     }
 
-    while( p_media->i_es )
+    for( int i = 0; i < p_media->i_es; i++ )
     {
-        media_es_t *p_es = p_media->es[0];
-        TAB_REMOVE( p_media->i_es, p_media->es, p_es );
-        free( p_es->rtp_fmt.fmtp );
-        free( p_es );
+        free( p_media->es[i]->rtp_fmt.fmtp );
+        free( p_media->es[i] );
     }
+    free( p_media->es );
 
-    TAB_CLEAN( p_media->i_es, p_media->es );
     free( p_media );
 }
 
@@ -342,7 +341,8 @@ static void CommandPush( vod_t *p_vod, rtsp_cmd_type_t i_type,
     p_cmd = block_Alloc( sizeof(rtsp_cmd_t) );
     memcpy( p_cmd->p_buffer, &cmd, sizeof(cmd) );
 
-    block_FifoPut( p_vod->p_sys->p_fifo_cmd, p_cmd );
+    vod_sys_t *p_sys = p_vod->p_sys;
+    block_FifoPut( p_sys->p_fifo_cmd, p_cmd );
 }
 
 static void* CommandThread( void *obj )
@@ -392,8 +392,6 @@ static void* CommandThread( void *obj )
  *****************************************************************************/
 char *SDPGenerateVoD( const vod_media_t *p_media, const char *rtsp_url )
 {
-    char *psz_sdp;
-
     assert(rtsp_url != NULL);
     /* Check against URL format rtsp://[<ipv6>]:<port>/<path> */
     bool ipv6 = strlen( rtsp_url ) > 7 && rtsp_url[7] == '[';
@@ -408,19 +406,20 @@ char *SDPGenerateVoD( const vod_media_t *p_media, const char *rtsp_url )
     dst.ss_len = dstlen;
 #endif
 
-    psz_sdp = vlc_sdp_Start( VLC_OBJECT( p_media->p_vod ), "sout-rtp-",
-                             NULL, 0, (struct sockaddr *)&dst, dstlen );
-    if( psz_sdp == NULL )
+    struct vlc_memstream sdp;
+
+    if( vlc_sdp_Start( &sdp, VLC_OBJECT( p_media->p_vod ), "sout-rtp-",
+                       NULL, 0, (struct sockaddr *)&dst, dstlen ) )
         return NULL;
 
     if( p_media->i_length > 0 )
     {
         lldiv_t d = lldiv( p_media->i_length / 1000, 1000 );
-        sdp_AddAttribute( &psz_sdp, "range"," npt=0-%lld.%03u", d.quot,
+        sdp_AddAttribute( &sdp, "range"," npt=0-%lld.%03u", d.quot,
                           (unsigned)d.rem );
     }
 
-    sdp_AddAttribute ( &psz_sdp, "control", "%s", rtsp_url );
+    sdp_AddAttribute( &sdp, "control", "%s", rtsp_url );
 
     /* No locking needed, the ES table can't be modified now */
     for( int i = 0; i < p_media->i_es; i++ )
@@ -444,7 +443,7 @@ char *SDPGenerateVoD( const vod_media_t *p_media, const char *rtsp_url )
                 continue;
         }
 
-        sdp_AddMedia( &psz_sdp, mime_major, "RTP/AVP", 0,
+        sdp_AddMedia( &sdp, mime_major, "RTP/AVP", 0,
                       rtp_fmt->payload_type, false, 0,
                       rtp_fmt->ptname, rtp_fmt->clock_rate, rtp_fmt->channels,
                       rtp_fmt->fmtp );
@@ -452,12 +451,12 @@ char *SDPGenerateVoD( const vod_media_t *p_media, const char *rtsp_url )
         char *track_url = RtspAppendTrackPath( p_es->rtsp_id, rtsp_url );
         if( track_url != NULL )
         {
-            sdp_AddAttribute ( &psz_sdp, "control", "%s", track_url );
+            sdp_AddAttribute( &sdp, "control", "%s", track_url );
             free( track_url );
         }
     }
 
-    return psz_sdp;
+    return vlc_memstream_close( &sdp ) ? NULL : sdp.ptr;
 }
 
 int vod_check_range(vod_media_t *p_media, const char *psz_session,
@@ -507,7 +506,7 @@ const char *vod_get_mux(const vod_media_t *p_media)
 /* Match an RTP id to a VoD media ES and RTSP track to initialize it
  * with the data that was already set up */
 int vod_init_id(vod_media_t *p_media, const char *psz_session, int es_id,
-                sout_stream_id_t *sout_id, rtp_format_t *rtp_fmt,
+                sout_stream_id_sys_t *sout_id, rtp_format_t *rtp_fmt,
                 uint32_t *ssrc, uint16_t *seq_init)
 {
     media_es_t *p_es;
@@ -543,7 +542,7 @@ int vod_init_id(vod_media_t *p_media, const char *psz_session, int es_id,
 
 /* Remove references to the RTP id from its RTSP track */
 void vod_detach_id(vod_media_t *p_media, const char *psz_session,
-                   sout_stream_id_t *sout_id)
+                   sout_stream_id_sys_t *sout_id)
 {
     RtspTrackDetach(p_media->rtsp, psz_session, sout_id);
 }

@@ -19,6 +19,10 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
 --]]
 
+function descriptor()
+    return { scope="local" }
+end
+
 function trim (s)
   return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
 end
@@ -38,7 +42,7 @@ function read_meta()
 
     -- Find "Show.Name.S01E12-blah.avi"
     local title, seasonNumber
-    _, _, showName, seasonNumber, episodeNumber = string.find(name, "(.+)S(%d%d)E(%d%d).*")
+    _, _, showName, seasonNumber, episodeNumber = string.find(name, "(.+)S(%d+)E(%d+).*")
     if not showName then
         return
     end

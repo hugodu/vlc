@@ -1,30 +1,30 @@
 # ebml
 
-EBML_VERSION := 1.3.0
-EBML_URL := http://dl.matroska.org/downloads/libebml/libebml-$(EBML_VERSION).tar.bz2
-#EBML_URL := $(CONTRIB_VIDEOLAN)/libebml-$(EBML_VERSION).tar.bz2
+EBML_VERSION := 1.3.6
+EBML_URL := http://dl.matroska.org/downloads/libebml/libebml-$(EBML_VERSION).tar.xz
 
-$(TARBALLS)/libebml-$(EBML_VERSION).tar.bz2:
-	$(call download,$(EBML_URL))
+ifeq ($(call need_pkg,"libebml"),)
+PKGS_FOUND += ebml
+endif
 
-.sum-ebml: libebml-$(EBML_VERSION).tar.bz2
+$(TARBALLS)/libebml-$(EBML_VERSION).tar.xz:
+	$(call download_pkg,$(EBML_URL),ebml)
 
-libebml: libebml-$(EBML_VERSION).tar.bz2 .sum-ebml
+.sum-ebml: libebml-$(EBML_VERSION).tar.xz
+
+ebml: libebml-$(EBML_VERSION).tar.xz .sum-ebml
 	$(UNPACK)
-	$(APPLY) $(SRC)/ebml/ebml-pic.patch
-	$(APPLY) $(SRC)/ebml/no-ansi.patch
+	$(APPLY) $(SRC)/ebml/0001-fix-build-with-gcc-7.patch
+	$(APPLY) $(SRC)/ebml/fix-clang-build.patch
 	$(MOVE)
 
 # libebml requires exceptions
-EBML_EXTRA_FLAGS = CXXFLAGS="${CXXFLAGS} -fexceptions" \
-					CPPFLAGS=""
-
-.ebml: libebml
-ifdef HAVE_WIN32
-	cd $< && $(MAKE) -C make/mingw32 prefix="$(PREFIX)" $(HOSTVARS) SHARED=no
-else
-	cd $< && $(MAKE) -C make/linux prefix="$(PREFIX)" $(HOSTVARS) $(EBML_EXTRA_FLAGS) staticlib
+EBML_EXTRA_FLAGS = CXXFLAGS="${CXXFLAGS} -fexceptions -fvisibility=hidden"
+ifdef HAVE_ANDROID
+EBML_EXTRA_FLAGS += CPPFLAGS=""
 endif
-	cd $< && $(MAKE) -C make/linux install_staticlib install_headers prefix="$(PREFIX)" $(HOSTVARS)
-	$(RANLIB) "$(PREFIX)/lib/libebml.a"
+
+.ebml: ebml toolchain.cmake
+	cd $< && $(HOSTVARS_PIC) $(CMAKE) -DBUILD_SHARED_LIBS=OFF
+	cd $< && $(MAKE) install
 	touch $@

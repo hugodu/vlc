@@ -9,13 +9,16 @@ PKGS_FOUND += sdl
 endif
 
 $(TARBALLS)/SDL-$(SDL_VERSION).tar.gz:
-	$(call download,$(SDL_URL))
+	$(call download_pkg,$(SDL_URL),sdl)
 
 .sum-sdl: SDL-$(SDL_VERSION).tar.gz
 
 sdl: SDL-$(SDL_VERSION).tar.gz .sum-sdl
 	$(UNPACK)
+	$(APPLY) $(SRC)/sdl/direct_palette_ref.diff
+	$(UPDATE_AUTOCONFIG)
 	$(MOVE)
+	mv sdl/config.sub sdl/config.guess sdl/build-scripts
 
 SDLCONF := $(HOSTCONF) \
 	--disable-audio \
@@ -28,7 +31,6 @@ SDLCONF := $(HOSTCONF) \
 	--disable-file \
 	--disable-assembly \
 	--disable-video-x11 \
-	--disable-video-aalib \
 	--disable-video-dga \
 	--disable-video-fbcon \
 	--disable-video-directfb \

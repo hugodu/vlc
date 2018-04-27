@@ -69,11 +69,7 @@ struct vout_thread_sys_t
     filter_t        *spu_blend;
 
     /* Video output window */
-    struct {
-        bool              is_unused;
-        vout_window_cfg_t cfg;
-        vout_window_t     *object;
-    } window;
+    vout_window_t   *window;
 
     /* Thread & synchronization */
     vlc_thread_t    thread;
@@ -85,7 +81,6 @@ struct vout_thread_sys_t
         char           *title;
         vout_display_t *vd;
         bool           use_dr;
-        picture_t      *filtered;
     } display;
 
     struct {
@@ -114,6 +109,11 @@ struct vout_thread_sys_t
         int         position;
     } title;
 
+    struct {
+        bool        is_interlaced;
+        mtime_t     date;
+    } interlacing;
+
     /* */
     bool            is_late_dropped;
 
@@ -122,15 +122,15 @@ struct vout_thread_sys_t
         vlc_mutex_t     lock;
         char            *configuration;
         video_format_t  format;
-        filter_chain_t  *chain_static;
-        filter_chain_t  *chain_interactive;
+        struct filter_chain_t *chain_static;
+        struct filter_chain_t *chain_interactive;
+        bool            has_deint;
     } filter;
 
     /* */
     vlc_mouse_t     mouse;
 
     /* */
-    vlc_mutex_t     picture_lock;                 /**< picture heap lock */
     picture_pool_t  *private_pool;
     picture_pool_t  *display_pool;
     picture_pool_t  *decoder_pool;
@@ -140,7 +140,7 @@ struct vout_thread_sys_t
 
 /* TODO to move them to vlc_vout.h */
 void vout_ControlChangeFullscreen(vout_thread_t *, bool fullscreen);
-void vout_ControlChangeOnTop(vout_thread_t *, bool is_on_top);
+void vout_ControlChangeWindowState(vout_thread_t *, unsigned state);
 void vout_ControlChangeDisplayFilled(vout_thread_t *, bool is_filled);
 void vout_ControlChangeZoom(vout_thread_t *, int num, int den);
 void vout_ControlChangeSampleAspectRatio(vout_thread_t *, unsigned num, unsigned den);
@@ -151,6 +151,7 @@ void vout_ControlChangeFilters(vout_thread_t *, const char *);
 void vout_ControlChangeSubSources(vout_thread_t *, const char *);
 void vout_ControlChangeSubFilters(vout_thread_t *, const char *);
 void vout_ControlChangeSubMargin(vout_thread_t *, int);
+void vout_ControlChangeViewpoint( vout_thread_t *, const vlc_viewpoint_t *);
 
 /* */
 void vout_IntfInit( vout_thread_t * );

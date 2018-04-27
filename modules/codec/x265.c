@@ -27,6 +27,7 @@
 # include "config.h"
 #endif
 
+#define VLC_MODULE_LICENSE VLC_LICENSE_GPL_2_PLUS
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_threads.h>
@@ -51,10 +52,8 @@ vlc_module_end ()
 
 struct encoder_sys_t
 {
-    x265_t          *h;
-    x265_param_t    param;
-
-    bool            write_headers;
+    x265_encoder    *h;
+    x265_param      param;
 
     mtime_t         i_initial_delay;
 
@@ -68,11 +67,12 @@ struct encoder_sys_t
 static block_t *Encode(encoder_t *p_enc, picture_t *p_pict)
 {
     encoder_sys_t *p_sys = p_enc->p_sys;
-    x265_picture_t pic;
+    x265_picture pic;
 
     x265_picture_init(&p_sys->param, &pic);
 
     if (likely(p_pict)) {
+        pic.pts = p_pict->date;
         if (unlikely(p_sys->initial_date == 0)) {
             p_sys->initial_date = p_pict->date;
 #ifndef NDEBUG
@@ -86,8 +86,8 @@ static block_t *Encode(encoder_t *p_enc, picture_t *p_pict)
         }
     }
 
-    x265_nal_t *nal;
-    int i_nal = 0;
+    x265_nal *nal;
+    uint32_t i_nal = 0;
     x265_encoder_encode(p_sys->h, &nal, &i_nal,
             likely(p_pict) ? &pic : NULL, &pic);
 
@@ -95,24 +95,15 @@ static block_t *Encode(encoder_t *p_enc, picture_t *p_pict)
         return NULL;
 
     int i_out = 0;
-    for (int i = 0; i < i_nal; i++)
-        i_out += nal[i].i_payload;
+    for (uint32_t i = 0; i < i_nal; i++)
+        i_out += nal[i].sizeBytes;
 
-    int i_extra = 0;
-    if (unlikely(p_sys->write_headers)) {
-        i_extra = p_enc->fmt_out.i_extra;
-        p_sys->write_headers = false;
-    }
-
-    block_t *p_block = block_Alloc(i_extra + i_out);
+    block_t *p_block = block_Alloc(i_out);
     if (!p_block)
         return NULL;
 
-    if (unlikely(i_extra))
-       memcpy(p_block->p_buffer, p_enc->fmt_out.p_extra, i_extra);
-
     /* all payloads are sequentially laid out in memory */
-    memcpy(p_block->p_buffer + i_extra, nal[0].p_payload, i_out);
+    memcpy(p_block->p_buffer, nal[0].payload, i_out);
 
     /* This isn't really valid for streams with B-frames */
     p_block->i_length = CLOCK_FREQ *
@@ -125,12 +116,14 @@ static block_t *Encode(encoder_t *p_enc, picture_t *p_pict)
     switch (pic.sliceType)
     {
     case X265_TYPE_I:
+    case X265_TYPE_IDR:
         p_block->i_flags |= BLOCK_FLAG_TYPE_I;
         break;
     case X265_TYPE_P:
         p_block->i_flags |= BLOCK_FLAG_TYPE_P;
         break;
     case X265_TYPE_B:
+    case X265_TYPE_BREF:
         p_block->i_flags |= BLOCK_FLAG_TYPE_B;
         break;
     }
@@ -148,7 +141,7 @@ static int  Open (vlc_object_t *p_this)
     encoder_t     *p_enc = (encoder_t *)p_this;
     encoder_sys_t *p_sys;
 
-    if (p_enc->fmt_out.i_codec != VLC_CODEC_HEVC && !p_enc->b_force)
+    if (p_enc->fmt_out.i_codec != VLC_CODEC_HEVC && !p_enc->obj.force)
         return VLC_EGENERIC;
 
     p_enc->fmt_out.i_cat = VIDEO_ES;
@@ -159,15 +152,28 @@ static int  Open (vlc_object_t *p_this)
 
     p_enc->fmt_in.i_codec = VLC_CODEC_I420;
 
-    x265_param_t *param = &p_sys->param;
+    x265_param *param = &p_sys->param;
     x265_param_default(param);
 
     param->frameNumThreads = vlc_GetCPUCount();
     param->bEnableWavefront = 0; // buggy in x265, use frame threading for now
     param->maxCUSize = 16; /* use smaller macroblock */
 
-    param->frameRate = p_enc->fmt_in.video.i_frame_rate /
+#if X265_BUILD >= 6
+    param->fpsNum = p_enc->fmt_in.video.i_frame_rate;
+    param->fpsDenom = p_enc->fmt_in.video.i_frame_rate_base;
+    if (!param->fpsNum) {
+        param->fpsNum = 25;
+        param->fpsDenom = 1;
+    }
+#else
+    if (p_enc->fmt_in.video.i_frame_rate_base) {
+        param->frameRate = p_enc->fmt_in.video.i_frame_rate /
             p_enc->fmt_in.video.i_frame_rate_base;
+    } else {
+        param->frameRate = 25;
+    }
+#endif
     param->sourceWidth = p_enc->fmt_in.video.i_visible_width;
     param->sourceHeight = p_enc->fmt_in.video.i_visible_height;
 
@@ -195,17 +201,17 @@ static int  Open (vlc_object_t *p_this)
         return VLC_EGENERIC;
     }
 
-    x265_nal_t *nal;
-    int i_nal;
-    if (x265_encoder_headers(p_sys->h, &nal, &i_nal)) {
+    x265_nal *nal;
+    uint32_t i_nal;
+    if (x265_encoder_headers(p_sys->h, &nal, &i_nal) < 0) {
         msg_Err(p_enc, "cannot get x265 headers");
         Close(VLC_OBJECT(p_enc));
         return VLC_EGENERIC;
     }
 
     size_t i_extra = 0;
-    for (int i = 0; i < i_nal; i++)
-        i_extra += nal[i].i_payload;
+    for (uint32_t i = 0; i < i_nal; i++)
+        i_extra += nal[i].sizeBytes;
 
     p_enc->fmt_out.i_extra = i_extra;
 
@@ -215,15 +221,14 @@ static int  Open (vlc_object_t *p_this)
         return VLC_ENOMEM;
     }
 
-    for (int i = 0; i < i_nal; i++) {
-        memcpy(p_extra, nal[i].p_payload, nal[i].i_payload);
-        p_extra += nal[i].i_payload;
+    for (uint32_t i = 0; i < i_nal; i++) {
+        memcpy(p_extra, nal[i].payload, nal[i].sizeBytes);
+        p_extra += nal[i].sizeBytes;
     }
 
     p_sys->dts = 0;
     p_sys->initial_date = 0;
     p_sys->i_initial_delay = 0;
-    p_sys->write_headers = true;
 
     p_enc->pf_encode_video = Encode;
     p_enc->pf_encode_audio = NULL;
@@ -236,7 +241,7 @@ static void Close(vlc_object_t *p_this)
     encoder_t     *p_enc = (encoder_t *)p_this;
     encoder_sys_t *p_sys = p_enc->p_sys;
 
-    x265_encoder_close(p_sys->h, NULL);
+    x265_encoder_close(p_sys->h);
 
     free(p_sys);
 }

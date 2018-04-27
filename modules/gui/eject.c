@@ -167,13 +167,14 @@ static int intf_Eject( vlc_object_t *p_this, const char *psz_device )
 # endif
     {
         msg_Err( p_this, "could not eject %s", psz_device );
-        close( fd );
+        vlc_close( fd );
         return VLC_EGENERIC;
     }
-    close( fd );
+    vlc_close( fd );
     return VLC_SUCCESS;
 
 #else
+    VLC_UNUSED( psz_device );
     msg_Warn( p_this, "CD-Rom ejection unsupported on this platform" );
     return VLC_EGENERIC;
 #endif

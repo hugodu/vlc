@@ -32,77 +32,39 @@
 # include "config.h"
 #endif
 #include <assert.h>
+#include <limits.h>
 
 #include <vlc_common.h>
-#include <vlc_picture.h>
+#include "picture.h"
 #include <vlc_image.h>
 #include <vlc_block.h>
 
-/**
- * Allocate a new picture in the heap.
- *
- * This function allocates a fake direct buffer in memory, which can be
- * used exactly like a video buffer. The video output thread then manages
- * how it gets displayed.
- */
-static int AllocatePicture( picture_t *p_pic )
-{
-    /* Calculate how big the new image should be */
-    size_t i_bytes = 0;
-    for( int i = 0; i < p_pic->i_planes; i++ )
-    {
-        const plane_t *p = &p_pic->p[i];
-
-        if( p->i_pitch < 0 || p->i_lines <= 0 ||
-            (size_t)p->i_pitch > (SIZE_MAX - i_bytes)/p->i_lines )
-        {
-            p_pic->i_planes = 0;
-            return VLC_ENOMEM;
-        }
-        i_bytes += p->i_pitch * p->i_lines;
-    }
-
-    uint8_t *p_data = vlc_memalign( 16, i_bytes );
-    if( i_bytes > 0 && p_data == NULL )
-    {
-        p_pic->i_planes = 0;
-        return VLC_EGENERIC;
-    }
-    p_pic->gc.p_sys = (void *)p_data;
-
-    /* Fill the p_pixels field for each plane */
-    p_pic->p[0].p_pixels = p_data;
-    for( int i = 1; i < p_pic->i_planes; i++ )
-    {
-        p_pic->p[i].p_pixels = &p_pic->p[i-1].p_pixels[ p_pic->p[i-1].i_lines *
-                                                        p_pic->p[i-1].i_pitch ];
-    }
-
-    return VLC_SUCCESS;
-}
-
-/*****************************************************************************
- *
- *****************************************************************************/
-
 static void PictureDestroyContext( picture_t *p_picture )
 {
-    void (**context)( void * ) = p_picture->context;
-    if( context != NULL )
+    picture_context_t *ctx = p_picture->context;
+    if (ctx != NULL)
     {
-        void (*context_destroy)( void * ) = *context;
-        context_destroy( context );
+        ctx->destroy(ctx);
         p_picture->context = NULL;
     }
 }
 
-static void PictureDestroy( picture_t *p_picture )
+/**
+ * Destroys a picture allocated by picture_NewFromResource() but without
+ * a custom destruction callback.
+ */
+static void picture_DestroyFromResource( picture_t *p_picture )
 {
-    assert( p_picture &&
-            atomic_load( &p_picture->gc.refcount ) == 0 );
-
-    vlc_free( p_picture->gc.p_sys );
     free( p_picture->p_sys );
+    free( p_picture );
+}
+
+/**
+ * Destroys a picture allocated with picture_NewFromFormat().
+ */
+static void picture_Destroy( picture_t *p_picture )
+{
+    aligned_free( p_picture->p[0].p_pixels );
     free( p_picture );
 }
 
@@ -128,8 +90,7 @@ static int LCM( int a, int b )
     return a * b / GCD( a, b );
 }
 
-int picture_Setup( picture_t *p_picture, vlc_fourcc_t i_chroma,
-                   int i_width, int i_height, int i_sar_num, int i_sar_den )
+int picture_Setup( picture_t *p_picture, const video_format_t *restrict fmt )
 {
     /* Store default values */
     p_picture->i_planes = 0;
@@ -140,14 +101,11 @@ int picture_Setup( picture_t *p_picture, vlc_fourcc_t i_chroma,
         p->i_pixel_pitch = 0;
     }
 
-    atomic_init( &p_picture->gc.refcount, 0 );
-    p_picture->gc.pf_destroy = NULL;
-    p_picture->gc.p_sys = NULL;
-
     p_picture->i_nb_fields = 2;
 
-    video_format_Setup( &p_picture->format, i_chroma, i_width, i_height,
-                        i_sar_num, i_sar_den );
+    video_format_Setup( &p_picture->format, fmt->i_chroma, fmt->i_width, fmt->i_height,
+                        fmt->i_visible_width, fmt->i_visible_height,
+                        fmt->i_sar_num, fmt->i_sar_den );
 
     const vlc_chroma_description_t *p_dsc =
         vlc_fourcc_GetChromaDescription( p_picture->format.i_chroma );
@@ -160,9 +118,10 @@ int picture_Setup( picture_t *p_picture, vlc_fourcc_t i_chroma,
        Which is respected if you have
        V % lcm( p_dsc->p[0..planes].w.i_den * 16) == 0
     */
-    int i_modulo_w = 1;
-    int i_modulo_h = 1;
-    unsigned int i_ratio_h  = 1;
+    unsigned i_modulo_w = 1;
+    unsigned i_modulo_h = 1;
+    unsigned i_ratio_h  = 1;
+
     for( unsigned i = 0; i < p_dsc->plane_count; i++ )
     {
         i_modulo_w = LCM( i_modulo_w, 16 * p_dsc->p[i].w.den );
@@ -172,22 +131,44 @@ int picture_Setup( picture_t *p_picture, vlc_fourcc_t i_chroma,
     }
     i_modulo_h = LCM( i_modulo_h, 32 );
 
-    const int i_width_aligned  = ( i_width  + i_modulo_w - 1 ) / i_modulo_w * i_modulo_w;
-    const int i_height_aligned = ( i_height + i_modulo_h - 1 ) / i_modulo_h * i_modulo_h;
-    const int i_height_extra   = 2 * i_ratio_h; /* This one is a hack for some ASM functions */
+    unsigned width, height;
+
+    if (unlikely(add_overflow(fmt->i_width, i_modulo_w - 1, &width))
+     || unlikely(add_overflow(fmt->i_height, i_modulo_h - 1, &height)))
+        return VLC_EGENERIC;
+
+    width = width / i_modulo_w * i_modulo_w;
+    height = height / i_modulo_h * i_modulo_h;
+
+    /* Hack: append two scan lines for some SIMD assembler */
+    if (unlikely(add_overflow(height, 2 * i_ratio_h, &height)))
+        return VLC_EGENERIC;
+
+    /* plane_t uses 'int'. */
+    if (unlikely(width > INT_MAX) || unlikely(height > INT_MAX))
+        return VLC_EGENERIC;
+
     for( unsigned i = 0; i < p_dsc->plane_count; i++ )
     {
         plane_t *p = &p_picture->p[i];
+        const vlc_rational_t *h = &p_dsc->p[i].h;
+        const vlc_rational_t *w = &p_dsc->p[i].w;
 
-        p->i_lines         = (i_height_aligned + i_height_extra ) * p_dsc->p[i].h.num / p_dsc->p[i].h.den;
-        p->i_visible_lines = i_height * p_dsc->p[i].h.num / p_dsc->p[i].h.den;
-        p->i_pitch         = i_width_aligned * p_dsc->p[i].w.num / p_dsc->p[i].w.den * p_dsc->pixel_size;
-        p->i_visible_pitch = i_width * p_dsc->p[i].w.num / p_dsc->p[i].w.den * p_dsc->pixel_size;
-        p->i_pixel_pitch   = p_dsc->pixel_size;
+        /* A plane cannot be over-sampled. This could lead to overflow. */
+        assert(h->den >= h->num);
+        assert(w->den >= w->num);
+
+        p->i_lines = height * h->num / h->den;
+        p->i_visible_lines = (fmt->i_visible_height + (h->den - 1)) / h->den * h->num;
+
+        p->i_pitch = width * w->num / w->den * p_dsc->pixel_size;
+        p->i_visible_pitch = (fmt->i_visible_width + (w->den - 1)) / w->den * w->num
+                             * p_dsc->pixel_size;
+        p->i_pixel_pitch = p_dsc->pixel_size;
 
         assert( (p->i_pitch % 16) == 0 );
     }
-    p_picture->i_planes  = p_dsc->plane_count;
+    p_picture->i_planes = p_dsc->plane_count;
 
     return VLC_SUCCESS;
 }
@@ -195,13 +176,15 @@ int picture_Setup( picture_t *p_picture, vlc_fourcc_t i_chroma,
 /*****************************************************************************
  *
  *****************************************************************************/
-picture_t *picture_NewFromResource( const video_format_t *p_fmt, const picture_resource_t *p_resource )
+
+static picture_priv_t *picture_NewPrivate(const video_format_t *restrict p_fmt)
 {
     video_format_t fmt = *p_fmt;
 
     /* It is needed to be sure all information are filled */
     video_format_Setup( &fmt, p_fmt->i_chroma,
                               p_fmt->i_width, p_fmt->i_height,
+                              p_fmt->i_visible_width, p_fmt->i_visible_height,
                               p_fmt->i_sar_num, p_fmt->i_sar_den );
     if( p_fmt->i_x_offset < p_fmt->i_width &&
         p_fmt->i_y_offset < p_fmt->i_height &&
@@ -210,62 +193,109 @@ picture_t *picture_NewFromResource( const video_format_t *p_fmt, const picture_r
         video_format_CopyCrop( &fmt, p_fmt );
 
     /* */
-    picture_t *p_picture = calloc( 1, sizeof(*p_picture) );
-    if( !p_picture )
+    picture_priv_t *priv = malloc( sizeof (*priv) );
+    if( unlikely(priv == NULL) )
         return NULL;
 
+    picture_t *p_picture = &priv->picture;
+
+    memset( p_picture, 0, sizeof( *p_picture ) );
+    p_picture->format = fmt;
+
     /* Make sure the real dimensions are a multiple of 16 */
-    if( picture_Setup( p_picture, fmt.i_chroma, fmt.i_width, fmt.i_height,
-                       fmt.i_sar_num, fmt.i_sar_den ) )
+    if( picture_Setup( p_picture, &fmt ) )
     {
         free( p_picture );
         return NULL;
     }
 
-    if( p_resource )
-    {
-        p_picture->p_sys = p_resource->p_sys;
-        p_picture->gc.pf_destroy = p_resource->pf_destroy;
-        assert( p_picture->gc.p_sys == NULL );
+    atomic_init( &priv->gc.refs, 1 );
+    priv->gc.opaque = NULL;
 
-        for( int i = 0; i < p_picture->i_planes; i++ )
-        {
-            p_picture->p[i].p_pixels = p_resource->p[i].p_pixels;
-            p_picture->p[i].i_lines  = p_resource->p[i].i_lines;
-            p_picture->p[i].i_pitch  = p_resource->p[i].i_pitch;
-        }
-    }
+    return priv;
+}
+
+picture_t *picture_NewFromResource( const video_format_t *p_fmt, const picture_resource_t *p_resource )
+{
+    assert(p_resource != NULL);
+
+    picture_priv_t *priv = picture_NewPrivate(p_fmt);
+    if (unlikely(priv == NULL))
+        return NULL;
+
+    picture_t *p_picture = &priv->picture;
+
+    p_picture->p_sys = p_resource->p_sys;
+
+    if( p_resource->pf_destroy != NULL )
+        priv->gc.destroy = p_resource->pf_destroy;
     else
+        priv->gc.destroy = picture_DestroyFromResource;
+
+    for( int i = 0; i < p_picture->i_planes; i++ )
     {
-        if( AllocatePicture( p_picture ) )
-        {
-            free( p_picture );
-            return NULL;
-        }
+        p_picture->p[i].p_pixels = p_resource->p[i].p_pixels;
+        p_picture->p[i].i_lines  = p_resource->p[i].i_lines;
+        p_picture->p[i].i_pitch  = p_resource->p[i].i_pitch;
     }
-
-    /* */
-    p_picture->format = fmt;
-
-    atomic_init( &p_picture->gc.refcount, 1 );
-    if( p_picture->gc.pf_destroy == NULL )
-        p_picture->gc.pf_destroy = PictureDestroy;
 
     return p_picture;
 }
 
-picture_t *picture_NewFromFormat( const video_format_t *p_fmt )
+#define PICTURE_SW_SIZE_MAX (UINT32_C(1) << 28) /* 256MB: 8K * 8K * 4*/
+
+picture_t *picture_NewFromFormat(const video_format_t *restrict fmt)
 {
-    return picture_NewFromResource( p_fmt, NULL );
+    picture_priv_t *priv = picture_NewPrivate(fmt);
+    if (unlikely(priv == NULL))
+        return NULL;
+
+    priv->gc.destroy = picture_Destroy;
+
+    picture_t *pic = &priv->picture;
+    if (pic->i_planes == 0)
+        return pic;
+
+    /* Calculate how big the new image should be */
+    size_t plane_sizes[PICTURE_PLANE_MAX];
+    size_t pic_size = 0;
+
+    for (int i = 0; i < pic->i_planes; i++)
+    {
+        const plane_t *p = &pic->p[i];
+
+        if (unlikely(mul_overflow(p->i_pitch, p->i_lines, &plane_sizes[i]))
+         || unlikely(add_overflow(pic_size, plane_sizes[i], &pic_size)))
+            goto error;
+    }
+
+    if (unlikely(pic_size >= PICTURE_SW_SIZE_MAX))
+        goto error;
+
+    uint8_t *buf = aligned_alloc(16, pic_size);
+    if (unlikely(buf == NULL))
+        goto error;
+
+    /* Fill the p_pixels field for each plane */
+    for (int i = 0; i < pic->i_planes; i++)
+    {
+        pic->p[i].p_pixels = buf;
+        buf += plane_sizes[i];
+    }
+
+    return pic;
+error:
+    free(pic);
+    return NULL;
 }
 
 picture_t *picture_New( vlc_fourcc_t i_chroma, int i_width, int i_height, int i_sar_num, int i_sar_den )
 {
     video_format_t fmt;
 
-    memset( &fmt, 0, sizeof(fmt) );
+    video_format_Init( &fmt, 0 );
     video_format_Setup( &fmt, i_chroma, i_width, i_height,
-                        i_sar_num, i_sar_den );
+                        i_width, i_height, i_sar_num, i_sar_den );
 
     return picture_NewFromFormat( &fmt );
 }
@@ -276,25 +306,27 @@ picture_t *picture_New( vlc_fourcc_t i_chroma, int i_width, int i_height, int i_
 
 picture_t *picture_Hold( picture_t *p_picture )
 {
-    atomic_fetch_add( &p_picture->gc.refcount, 1 );
+    assert( p_picture != NULL );
+
+    picture_priv_t *priv = (picture_priv_t *)p_picture;
+    uintptr_t refs = atomic_fetch_add( &priv->gc.refs, 1 );
+    assert( refs > 0 );
     return p_picture;
 }
 
 void picture_Release( picture_t *p_picture )
 {
-    uintptr_t refs = atomic_fetch_sub( &p_picture->gc.refcount, 1 );
+    assert( p_picture != NULL );
+
+    picture_priv_t *priv = (picture_priv_t *)p_picture;
+    uintptr_t refs = atomic_fetch_sub( &priv->gc.refs, 1 );
     assert( refs != 0 );
     if( refs > 1 )
         return;
 
     PictureDestroyContext( p_picture );
-    assert( p_picture->gc.pf_destroy != NULL );
-    p_picture->gc.pf_destroy( p_picture );
-}
-
-bool picture_IsReferenced( picture_t *p_picture )
-{
-    return atomic_load( &p_picture->gc.refcount ) > 1;
+    assert( priv->gc.destroy != NULL );
+    priv->gc.destroy( p_picture );
 }
 
 /*****************************************************************************
@@ -323,12 +355,11 @@ void plane_CopyPixels( plane_t *p_dst, const plane_t *p_src )
         /* We need to proceed line by line */
         uint8_t *p_in = p_src->p_pixels;
         uint8_t *p_out = p_dst->p_pixels;
-        int i_line;
 
         assert( p_in );
         assert( p_out );
 
-        for( i_line = i_height; i_line--; )
+        for( int i_line = i_height; i_line--; )
         {
             memcpy( p_out, p_in, i_width );
             p_in += p_src->i_pitch;
@@ -349,10 +380,13 @@ void picture_CopyProperties( picture_t *p_dst, const picture_t *p_src )
 
 void picture_CopyPixels( picture_t *p_dst, const picture_t *p_src )
 {
-    int i;
-
-    for( i = 0; i < p_src->i_planes ; i++ )
+    for( int i = 0; i < p_src->i_planes ; i++ )
         plane_CopyPixels( p_dst->p+i, p_src->p+i );
+
+    assert( p_dst->context == NULL );
+
+    if( p_src->context != NULL )
+        p_dst->context = p_src->context->copy( p_src->context );
 }
 
 void picture_Copy( picture_t *p_dst, const picture_t *p_src )
@@ -361,6 +395,38 @@ void picture_Copy( picture_t *p_dst, const picture_t *p_src )
     picture_CopyProperties( p_dst, p_src );
 }
 
+static void picture_DestroyClone(picture_t *clone)
+{
+    picture_t *picture = ((picture_priv_t *)clone)->gc.opaque;
+
+    free(clone);
+    picture_Release(picture);
+}
+
+picture_t *picture_Clone(picture_t *picture)
+{
+    /* TODO: merge common code with picture_pool_ClonePicture(). */
+    picture_resource_t res = {
+        .p_sys = picture->p_sys,
+        .pf_destroy = picture_DestroyClone,
+    };
+
+    for (int i = 0; i < picture->i_planes; i++) {
+        res.p[i].p_pixels = picture->p[i].p_pixels;
+        res.p[i].i_lines = picture->p[i].i_lines;
+        res.p[i].i_pitch = picture->p[i].i_pitch;
+    }
+
+    picture_t *clone = picture_NewFromResource(&picture->format, &res);
+    if (likely(clone != NULL)) {
+        ((picture_priv_t *)clone)->gc.opaque = picture;
+        picture_Hold(picture);
+
+        if (picture->context != NULL)
+            clone->context = picture->context->copy(picture->context);
+    }
+    return clone;
+}
 
 /*****************************************************************************
  *
@@ -388,17 +454,26 @@ int picture_Export( vlc_object_t *p_obj,
     fmt_out.i_chroma  = i_format;
 
     /* compute original width/height */
-    unsigned int i_original_width;
-    unsigned int i_original_height;
-    if( fmt_in.i_sar_num >= fmt_in.i_sar_den )
+    unsigned int i_width, i_height, i_original_width, i_original_height;
+    if( fmt_in.i_visible_width > 0 && fmt_in.i_visible_height > 0 )
     {
-        i_original_width = (int64_t)fmt_in.i_width * fmt_in.i_sar_num / fmt_in.i_sar_den;
-        i_original_height = fmt_in.i_height;
+        i_width = fmt_in.i_visible_width;
+        i_height = fmt_in.i_visible_height;
     }
     else
     {
-        i_original_width =  fmt_in.i_width;
-        i_original_height = (int64_t)fmt_in.i_height * fmt_in.i_sar_den / fmt_in.i_sar_num;
+        i_width = fmt_in.i_width;
+        i_height = fmt_in.i_height;
+    }
+    if( fmt_in.i_sar_num >= fmt_in.i_sar_den )
+    {
+        i_original_width = (int64_t)i_width * fmt_in.i_sar_num / fmt_in.i_sar_den;
+        i_original_height = i_height;
+    }
+    else
+    {
+        i_original_width =  i_width;
+        i_original_height = i_height * fmt_in.i_sar_den / fmt_in.i_sar_num;
     }
 
     /* */
@@ -410,16 +485,18 @@ int picture_Export( vlc_object_t *p_obj,
     /* scale if only one direction is provided */
     if( fmt_out.i_height == 0 && fmt_out.i_width > 0 )
     {
-        fmt_out.i_height = fmt_in.i_height * fmt_out.i_width
-                     * fmt_in.i_sar_den / fmt_in.i_width / fmt_in.i_sar_num;
+        fmt_out.i_height = i_height * fmt_out.i_width
+                         * fmt_in.i_sar_den / fmt_in.i_width / fmt_in.i_sar_num;
     }
     else if( fmt_out.i_width == 0 && fmt_out.i_height > 0 )
     {
-        fmt_out.i_width  = fmt_in.i_width * fmt_out.i_height
-                     * fmt_in.i_sar_num / fmt_in.i_height / fmt_in.i_sar_den;
+        fmt_out.i_width  = i_width * fmt_out.i_height
+                         * fmt_in.i_sar_num / fmt_in.i_height / fmt_in.i_sar_den;
     }
 
     image_handler_t *p_image = image_HandlerCreate( p_obj );
+    if( !p_image )
+        return VLC_ENOMEM;
 
     block_t *p_block = image_Write( p_image, p_picture, &fmt_in, &fmt_out );
 
@@ -436,26 +513,4 @@ int picture_Export( vlc_object_t *p_obj,
     *pp_image = p_block;
 
     return VLC_SUCCESS;
-}
-
-unsigned picture_BlendSubpicture(picture_t *dst,
-                                 filter_t *blend, subpicture_t *src)
-{
-    unsigned done = 0;
-
-    assert(src && !src->b_fade && src->b_absolute);
-
-    for (subpicture_region_t *r = src->p_region; r != NULL; r = r->p_next) {
-        assert(r->p_picture && r->i_align == 0);
-        if (filter_ConfigureBlend(blend, dst->format.i_width,
-                                  dst->format.i_height,  &r->fmt)
-         || filter_Blend(blend, dst, r->i_x, r->i_y, r->p_picture,
-                         src->i_alpha * r->i_alpha / 255))
-            msg_Err(blend, "blending %4.4s to %4.4s failed",
-                    (char *)&blend->fmt_in.video.i_chroma,
-                    (char *)&blend->fmt_out.video.i_chroma );
-        else
-            done++;
-    }
-    return done;
 }

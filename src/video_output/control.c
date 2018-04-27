@@ -62,7 +62,6 @@ void vout_control_Init(vout_control_t *ctrl)
     vlc_cond_init(&ctrl->wait_acknowledge);
 
     ctrl->is_dead = false;
-    ctrl->is_sleeping = false;
     ctrl->can_sleep = true;
     ctrl->is_processing = false;
     ARRAY_INIT(ctrl->cmd);
@@ -115,8 +114,7 @@ void vout_control_Wake(vout_control_t *ctrl)
 {
     vlc_mutex_lock(&ctrl->lock);
     ctrl->can_sleep = false;
-    if (ctrl->is_sleeping)
-        vlc_cond_signal(&ctrl->wait_request);
+    vlc_cond_signal(&ctrl->wait_request);
     vlc_mutex_unlock(&ctrl->lock);
 }
 
@@ -174,29 +172,21 @@ void vout_control_PushString(vout_control_t *ctrl, int type, const char *string)
     vout_control_cmd_t cmd;
 
     vout_control_cmd_Init(&cmd, type);
-    cmd.u.string = strdup(string);
+    cmd.u.string = string ? strdup(string) : NULL;
     vout_control_Push(ctrl, &cmd);
 }
 
 int vout_control_Pop(vout_control_t *ctrl, vout_control_cmd_t *cmd,
-                     mtime_t deadline, mtime_t timeout)
+                     mtime_t deadline)
 {
     vlc_mutex_lock(&ctrl->lock);
     if (ctrl->cmd.i_size <= 0) {
         ctrl->is_processing = false;
         vlc_cond_broadcast(&ctrl->wait_acknowledge);
 
-        const mtime_t max_deadline = mdate() + timeout;
-
-        /* Supurious wake up are perfectly fine */
-        if (deadline <= VLC_TS_INVALID) {
-            ctrl->is_sleeping = true;
-            if (ctrl->can_sleep)
-                vlc_cond_timedwait(&ctrl->wait_request, &ctrl->lock, max_deadline);
-            ctrl->is_sleeping = false;
-        } else {
-            vlc_cond_timedwait(&ctrl->wait_request, &ctrl->lock, __MIN(deadline, max_deadline));
-        }
+        /* Spurious wakeups are perfectly fine */
+        if (deadline > VLC_TS_INVALID && ctrl->can_sleep)
+            vlc_cond_timedwait(&ctrl->wait_request, &ctrl->lock, deadline);
     }
 
     bool has_cmd;

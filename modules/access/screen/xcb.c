@@ -25,6 +25,7 @@
 #endif
 #include <stdarg.h>
 #include <assert.h>
+#include <errno.h>
 #include <xcb/xcb.h>
 #include <xcb/composite.h>
 #ifdef HAVE_SYS_SHM_H
@@ -70,7 +71,7 @@ vlc_module_begin ()
     set_description (N_("Screen capture (with X11/XCB)"))
     set_category (CAT_INPUT)
     set_subcategory (SUBCAT_INPUT_ACCESS)
-    set_capability ("access_demux", 0)
+    set_capability ("access", 0)
     set_callbacks (Open, Close)
 
     add_float ("screen-fps", 2.0, FPS_TEXT, FPS_LONGTEXT, true)
@@ -141,8 +142,10 @@ static bool CheckSHM (xcb_connection_t *conn)
 static int Open (vlc_object_t *obj)
 {
     demux_t *demux = (demux_t *)obj;
-    demux_sys_t *p_sys = malloc (sizeof (*p_sys));
+    if (demux->out == NULL)
+        return VLC_EGENERIC;
 
+    demux_sys_t *p_sys = malloc (sizeof (*p_sys));
     if (p_sys == NULL)
         return VLC_ENOMEM;
     demux->p_sys = p_sys;
@@ -160,7 +163,7 @@ static int Open (vlc_object_t *obj)
     p_sys->conn = conn;
 
    /* Find configured screen */
-    if (!strcmp (demux->psz_access, "screen"))
+    if (!strcasecmp(demux->psz_name, "screen"))
     {
         const xcb_setup_t *setup = xcb_get_setup (conn);
         const xcb_screen_t *scr = NULL;
@@ -169,7 +172,7 @@ static int Open (vlc_object_t *obj)
         {
             if (snum == 0)
             {
-               scr = i.data;
+                scr = i.data;
                 break;
             }
             snum--;
@@ -183,7 +186,7 @@ static int Open (vlc_object_t *obj)
     }
     else
     /* Determine capture window */
-    if (!strcmp (demux->psz_access, "window"))
+    if (!strcasecmp(demux->psz_name, "window"))
     {
         char *end;
         unsigned long ul = strtoul (demux->psz_location, &end, 0);
@@ -348,8 +351,8 @@ discard:
         return;
     }
 
-    int w = sys->w;
-    int h = sys->h;
+    unsigned w = sys->w;
+    unsigned h = sys->h;
     int x, y;
 
     if (sys->follow_mouse)
@@ -365,9 +368,9 @@ discard:
         if (w == 0 || w > geo->width)
             w = geo->width;
         x = ptr->win_x;
-        if (x < w / 2)
+        if (x < (int)(w / 2))
             x = 0;
-        else if (x >= (int)geo->width - (w / 2))
+        else if (x >= (int)(geo->width - (w / 2)))
             x = geo->width - w;
         else
             x -= w / 2;
@@ -375,9 +378,9 @@ discard:
         if (h == 0 || h > geo->height)
             h = geo->height;
         y = ptr->win_y;
-        if (y < h / 2)
+        if (y < (int)(h / 2))
             y = 0;
-        else if (y >= (int)geo->height - (h / 2))
+        else if (y >= (int)(geo->height - (h / 2)))
             y = geo->height - h;
         else
             y -= h / 2;
@@ -390,14 +393,14 @@ discard:
         max = (int)geo->width - x;
         if (max <= 0)
             goto discard;
-        if (w == 0 || w > max)
+        if (w == 0 || w > (unsigned)max)
             w = max;
 
         y = sys->y;
         max = (int)geo->height - y;
         if (max <= 0)
             goto discard;
-        if (h == 0 || h > max)
+        if (h == 0 || h > (unsigned)max)
             h = max;
     }
 
@@ -438,7 +441,8 @@ discard:
         int id = shmget (IPC_PRIVATE, size, IPC_CREAT | 0777);
         if (id == -1) /* XXX: fallback */
         {
-            msg_Err (demux, "shared memory allocation error: %m");
+            msg_Err (demux, "shared memory allocation error: %s",
+                     vlc_strerror_c(errno));
             goto noshm;
         }
 
@@ -465,7 +469,8 @@ discard:
         shmctl (id, IPC_RMID, 0);
         if (-1 == (intptr_t)shm)
         {
-            msg_Err (demux, "shared memory attachment error: %m");
+            msg_Err (demux, "shared memory attachment error: %s",
+                     vlc_strerror_c(errno));
             return;
         }
 
@@ -499,9 +504,11 @@ noshm:
     {
         block->i_pts = block->i_dts = mdate ();
 
-        es_out_Control (demux->out, ES_OUT_SET_PCR, block->i_pts);
+        es_out_SetPCR(demux->out, block->i_pts);
         es_out_Send (demux->out, sys->es, block);
     }
+    else
+        block_Release (block);
 }
 
 static es_out_id_t *InitES (demux_t *demux, uint_fast16_t width,
@@ -522,7 +529,7 @@ static es_out_id_t *InitES (demux_t *demux, uint_fast16_t width,
         {
             case 32:
                 if (fmt->bits_per_pixel == 32)
-                    chroma = VLC_CODEC_RGBA;
+                    chroma = VLC_CODEC_ARGB;
                 break;
             case 24:
                 if (fmt->bits_per_pixel == 32)

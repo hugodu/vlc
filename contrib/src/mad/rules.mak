@@ -1,13 +1,19 @@
 # mad
 
 MAD_VERSION := 0.15.1b
-MAD_URL := $(CONTRIB_VIDEOLAN)/libmad-$(MAD_VERSION).tar.gz
+MAD_URL := $(CONTRIB_VIDEOLAN)/mad/libmad-$(MAD_VERSION).tar.gz
 
 ifdef GPL
 PKGS += mad
 endif
 ifeq ($(call need_pkg,"mad"),)
 PKGS_FOUND += mad
+endif
+
+ifdef HAVE_WIN32
+ifeq ($(ARCH),arm)
+MAD_CONF += --disable-aso
+endif
 endif
 
 $(TARBALLS)/libmad-$(MAD_VERSION).tar.gz:
@@ -29,10 +35,12 @@ endif
 	$(APPLY) $(SRC)/mad/mad-noopt.patch
 	$(APPLY) $(SRC)/mad/Provide-Thumb-2-alternative-code-for-MAD_F_MLN.diff
 	$(APPLY) $(SRC)/mad/mad-mips-h-constraint-removal.patch
+	$(APPLY) $(SRC)/mad/mad-foreign.patch
+	$(APPLY) $(SRC)/mad/check-bitstream-length.patch
 	$(MOVE)
 
 .mad: libmad
-	touch libmad/NEWS libmad/AUTHORS libmad/ChangeLog
+	$(REQUIRE_GPL)
 	$(RECONF)
 ifdef HAVE_IOS
 	cd $< && $(HOSTVARS) CCAS="$(AS)" CFLAGS="$(CFLAGS) -O3" ./configure $(HOSTCONF) $(MAD_CONF)

@@ -15,9 +15,7 @@ LIBVLC_SAMPLES = \
 nobase_doc_DATA = $(LIBVLC_SAMPLES)
 
 doc_DATA = \
-	bugreport-howto.txt \
 	fortunes.txt \
-	intf-vcd.txt \
 	$(NULL)
 
 CHANGELOGS = \
@@ -36,6 +34,11 @@ CHANGELOGS = \
 	ChangeLog-2011 \
 	ChangeLog-2012 \
 	ChangeLog-2013 \
+	ChangeLog-2014 \
+	ChangeLog-2015 \
+	ChangeLog-2016 \
+	ChangeLog-2017 \
+	ChangeLog-2018 \
 	$(NULL)
 
 man1_MANS = \
@@ -46,9 +49,7 @@ EXTRA_DIST = \
 	$(CHANGELOGS) \
 	$(man1_MANS) \
 	$(LIBVLC_SAMPLES) \
-	bugreport-howto.txt \
 	fortunes.txt \
-	intf-vcd.txt \
 	release-howto.txt \
 	Doxyfile.in \
 	lirc/example.lircrc \
@@ -83,7 +84,7 @@ $(CHANGELOGS): Makefile.am
 	fi
 
 # This one needs to be rebuilt all the time :)
-.PHONY: ChangeLog-2013 changelogs doc
+.PHONY: ChangeLog-2016 changelogs doc
 
 changelogs: $(CHANGELOGS)
 

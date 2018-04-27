@@ -33,8 +33,8 @@
 #include <vlc_plugin.h>
 #include <vlc_sout.h>
 #include <vlc_image.h>
-
 #include <vlc_filter.h>
+#include <vlc_picture.h>
 #include <vlc_url.h>
 #include "filter_picture.h"
 
@@ -67,13 +67,12 @@ static int EraseCallback( vlc_object_t *, char const *,
 vlc_module_begin ()
     set_description( N_("Erase video filter") )
     set_shortname( N_( "Erase" ))
-    set_capability( "video filter2", 0 )
+    set_capability( "video filter", 0 )
     set_help(ERASE_HELP)
     set_category( CAT_VIDEO )
     set_subcategory( SUBCAT_VIDEO_VFILTER )
 
-    add_loadfile( CFG_PREFIX "mask", NULL,
-                  MASK_TEXT, MASK_LONGTEXT, false )
+    add_loadfile(CFG_PREFIX "mask", NULL, MASK_TEXT, MASK_LONGTEXT)
     add_integer( CFG_PREFIX "x", 0, POSX_TEXT, POSX_LONGTEXT, false )
     add_integer( CFG_PREFIX "y", 0, POSY_TEXT, POSY_LONGTEXT, false )
 
@@ -98,25 +97,26 @@ struct filter_sys_t
 
 static void LoadMask( filter_t *p_filter, const char *psz_filename )
 {
+    filter_sys_t *p_sys = p_filter->p_sys;
     image_handler_t *p_image;
     video_format_t fmt_in, fmt_out;
-    picture_t *p_old_mask = p_filter->p_sys->p_mask;
-    memset( &fmt_in, 0, sizeof( video_format_t ) );
-    memset( &fmt_out, 0, sizeof( video_format_t ) );
-    fmt_out.i_chroma = VLC_CODEC_YUVA;
+    picture_t *p_old_mask = p_sys->p_mask;
+    video_format_Init( &fmt_in, 0 );
+    video_format_Init( &fmt_out, VLC_CODEC_YUVA );
     p_image = image_HandlerCreate( p_filter );
     char *psz_url = vlc_path2uri( psz_filename, NULL );
-    p_filter->p_sys->p_mask =
-        image_ReadUrl( p_image, psz_url, &fmt_in, &fmt_out );
+    p_sys->p_mask = image_ReadUrl( p_image, psz_url, &fmt_in, &fmt_out );
     free( psz_url );
-    if( p_filter->p_sys->p_mask )
+    video_format_Clean( &fmt_in );
+    video_format_Clean( &fmt_out );
+    if( p_sys->p_mask )
     {
         if( p_old_mask )
             picture_Release( p_old_mask );
     }
     else if( p_old_mask )
     {
-        p_filter->p_sys->p_mask = p_old_mask;
+        p_sys->p_mask = p_old_mask;
         msg_Err( p_filter, "Error while loading new mask. Keeping old mask." );
     }
     else
@@ -254,7 +254,6 @@ static void FilterErase( filter_t *p_filter, picture_t *p_inpic,
         uint8_t *p_mask = p_sys->p_mask->A_PIXELS;
         int i_x = p_sys->i_x, i_y = p_sys->i_y;
 
-        int x, y;
         int i_height = i_mask_visible_lines;
         int i_width  = i_mask_visible_pitch;
 
@@ -280,7 +279,7 @@ static void FilterErase( filter_t *p_filter, picture_t *p_inpic,
 
         /* Horizontal linear interpolation of masked areas */
         uint8_t *p_outpix = p_outpic->p[i_plane].p_pixels + i_y*i_pitch + i_x;
-        for( y = 0; y < i_height;
+        for( int y = 0; y < i_height;
              y++, p_mask += i_mask_pitch, p_outpix += i_pitch )
         {
             uint8_t prev, next = 0;
@@ -310,7 +309,7 @@ static void FilterErase( filter_t *p_filter, picture_t *p_inpic,
                 prev = 0xff;
             }
 
-            for( x = 0; x < i_width; x++ )
+            for( int x = 0; x < i_width; x++ )
             {
                 if( p_mask[i_plane?x<<1:x] > 127 )
                 {
@@ -386,11 +385,11 @@ static void FilterErase( filter_t *p_filter, picture_t *p_inpic,
         i_height = __MIN( i_visible_lines - i_y - 2, i_height );
         /* Make sure that we start at least 2 lines from the top (since our
          * bluring algorithm uses the 2 previous lines) */
-        y = __MAX(i_y,2);
+        int y = __MAX(i_y,2);
         p_outpix = p_outpic->p[i_plane].p_pixels + (i_y+y)*i_pitch + i_x;
         for( ; y < i_height; y++, p_mask += i_mask_pitch, p_outpix += i_pitch )
         {
-            for( x = 0; x < i_width; x++ )
+            for( int x = 0; x < i_width; x++ )
             {
                 if( p_mask[i_plane?x<<1:x] > 127 )
                 {

@@ -24,9 +24,9 @@
 
 #ifdef X11_SKINS
 
+#include <errno.h>
 #include <unistd.h>
 #include <dirent.h>
-#include <sys/stat.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/Xinerama.h>
 
@@ -45,7 +45,8 @@
 #include <vlc_xlib.h>
 
 X11Factory::X11Factory( intf_thread_t *pIntf ): OSFactory( pIntf ),
-    m_pDisplay( NULL ), m_pTimerLoop( NULL ), m_dirSep( "/" )
+    m_pDisplay( NULL ), m_pTimerLoop( NULL ), m_dirSep( "/" ),
+    mPointerWindow( None ), mVoutWindow( None ), mEmptyCursor( None )
 {
     // see init()
 }
@@ -53,6 +54,8 @@ X11Factory::X11Factory( intf_thread_t *pIntf ): OSFactory( pIntf ),
 
 X11Factory::~X11Factory()
 {
+    if( mEmptyCursor != None )
+        XFreeCursor( m_pDisplay->getDisplay(), mEmptyCursor );
     delete m_pTimerLoop;
     delete m_pDisplay;
 }
@@ -83,12 +86,12 @@ bool X11Factory::init()
                                      ConnectionNumber( pDisplay ) );
 
     // Initialize the resource path
-    char *datadir = config_GetUserDir( VLC_DATA_DIR );
-    m_resourcePath.push_back( (string)datadir + "/skins2" );
+    char *datadir = config_GetUserDir( VLC_USERDATA_DIR );
+    m_resourcePath.push_back( (std::string)datadir + "/skins2" );
     free( datadir );
-    m_resourcePath.push_back( (string)"share/skins2" );
-    datadir = config_GetDataDir();
-    m_resourcePath.push_back( (string)datadir + "/skins2" );
+    m_resourcePath.push_back( (std::string)"share/skins2" );
+    datadir = config_GetSysPath(VLC_PKG_DATA_DIR, "skins2");
+    m_resourcePath.push_back( (std::string)datadir );
     free( datadir );
 
     // Determine the monitor geometry
@@ -106,6 +109,9 @@ bool X11Factory::init()
                                 info[i].x_org, info[i].y_org );
         XFree( info );
     }
+
+    // init cursors
+    initCursors();
 
     return true;
 }
@@ -320,8 +326,32 @@ void X11Factory::getDefaultGeometry( int* p_width, int* p_height ) const
 
 SkinsRect X11Factory::getWorkArea() const
 {
-    // XXX
-    return SkinsRect( 0, 0, getScreenWidth(), getScreenHeight() );
+    // query Work Area if available from Window Manager
+    // otherwise, default to the whole screen
+    int x = 0, y = 0;
+    int w = getScreenWidth(), h = getScreenHeight();
+    if( m_pDisplay->m_net_workarea != None )
+    {
+        Atom ret;
+        int i_format;
+        unsigned long i_items, i_bytesafter;
+        long *values;
+        if( XGetWindowProperty( m_pDisplay->getDisplay(),
+                                DefaultRootWindow( m_pDisplay->getDisplay() ),
+                                m_pDisplay->m_net_workarea,
+                                0, 16384, False, XA_CARDINAL,
+                                &ret, &i_format, &i_items, &i_bytesafter,
+                                (unsigned char **)&values ) == Success )
+        {
+            x = values[0];
+            y = values[1];
+            w = values[2];
+            h = values[3];
+            XFree( values );
+        }
+    }
+    msg_Dbg( getIntf(),"WorkArea: %ix%i at +%i+%i", w, h, x, y );
+    return SkinsRect( x, y, w, h );
 }
 
 
@@ -338,7 +368,7 @@ void X11Factory::getMousePos( int &rXPos, int &rYPos ) const
 }
 
 
-void X11Factory::rmDir( const string &rPath )
+void X11Factory::rmDir( const std::string &rPath )
 {
     struct dirent *file;
     DIR *dir;
@@ -349,8 +379,7 @@ void X11Factory::rmDir( const string &rPath )
     // Parse the directory and remove everything it contains
     while( (file = readdir( dir )) )
     {
-        struct stat statbuf;
-        string filename = file->d_name;
+        std::string filename = file->d_name;
 
         // Skip "." and ".."
         if( filename == "." || filename == ".." )
@@ -360,14 +389,8 @@ void X11Factory::rmDir( const string &rPath )
 
         filename = rPath + "/" + filename;
 
-        if( !stat( filename.c_str(), &statbuf ) && statbuf.st_mode & S_IFDIR )
-        {
-            rmDir( filename );
-        }
-        else
-        {
+        if( rmdir( filename.c_str() ) && errno == ENOTDIR )
             unlink( filename.c_str() );
-        }
     }
 
     // Close the directory
@@ -377,4 +400,50 @@ void X11Factory::rmDir( const string &rPath )
     rmdir( rPath.c_str() );
 }
 
+
+void X11Factory::changeCursor( CursorType_t type ) const
+{
+    Cursor cursor = mCursors[type];
+    Window win = (type == OSFactory::kNoCursor) ? mVoutWindow : mPointerWindow;
+
+    if( win != None )
+        XDefineCursor( m_pDisplay->getDisplay(), win, cursor );
+}
+
+void X11Factory::initCursors( )
+{
+    Display *display = m_pDisplay->getDisplay();
+    static const struct {
+        CursorType_t type;
+        const char *name;
+    } cursors[] = {
+        { kDefaultArrow, "left_ptr" },
+        { kResizeNWSE, "bottom_right_corner" },
+        { kResizeNS, "bottom_side" },
+        { kResizeWE, "right_side" },
+        { kResizeNESW, "bottom_left_corner" },
+    };
+    // retrieve cursors from default theme
+    for( unsigned i = 0; i < sizeof(cursors) / sizeof(cursors[0]); i++ )
+        mCursors[cursors[i].type] =
+            XcursorLibraryLoadCursor( display, cursors[i].name );
+
+    // build an additional empty cursor
+    XColor color;
+    const char data[] = { 0 };
+    Window root = DefaultRootWindow( display );
+    Pixmap pix = XCreateBitmapFromData( display, root, data, 1, 1 );
+    mEmptyCursor = XCreatePixmapCursor( display, pix, pix, &color, &color, 0, 0 );
+    XFreePixmap( display, pix );
+    mCursors[kNoCursor] = mEmptyCursor;
+}
+
+
+void X11Factory::setPointerWindow( Window win )
+{
+    GenericWindow *pWin = m_windowMap[win];
+    if( pWin->getType() == GenericWindow::VoutWindow )
+        mVoutWindow = win;
+    mPointerWindow = win;
+}
 #endif

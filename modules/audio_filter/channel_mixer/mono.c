@@ -31,10 +31,7 @@
 #include <math.h>                                        /* sqrt */
 #include <stdint.h>                                         /* int16_t .. */
 
-#ifdef HAVE_UNISTD_H
-#   include <unistd.h>
-#endif
-
+#define VLC_MODULE_LICENSE VLC_LICENSE_GPL_2_PLUS
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_block.h>
@@ -351,14 +348,6 @@ static int OpenFilter( vlc_object_t *p_this )
         return VLC_EGENERIC;
     }
 
-    if( (p_filter->fmt_in.audio.i_format != p_filter->fmt_out.audio.i_format) ||
-        (p_filter->fmt_in.audio.i_format != VLC_CODEC_S16N) ||
-        (p_filter->fmt_out.audio.i_format != VLC_CODEC_S16N) )
-    {
-        /*msg_Err( p_this, "couldn't load mono filter" );*/
-        return VLC_EGENERIC;
-    }
-
     /* Allocate the memory needed to store the module's structure */
     p_sys = p_filter->p_sys = malloc( sizeof(filter_sys_t) );
     if( p_sys == NULL )
@@ -407,6 +396,11 @@ static int OpenFilter( vlc_object_t *p_this )
              p_filter->fmt_in.audio.i_bitspersample,
              p_filter->fmt_out.audio.i_bitspersample );
 
+    p_filter->fmt_in.audio.i_format = VLC_CODEC_S16N;
+    aout_FormatPrepare(&p_filter->fmt_in.audio);
+    p_filter->fmt_out.audio.i_format = VLC_CODEC_S16N;
+    aout_FormatPrepare(&p_filter->fmt_out.audio);
+
     return VLC_SUCCESS;
 }
 
@@ -438,7 +432,8 @@ static block_t *Convert( filter_t *p_filter, block_t *p_block )
         return NULL;
     }
 
-    i_out_size = p_block->i_nb_samples * p_filter->p_sys->i_bitspersample/8 *
+    filter_sys_t *p_sys = p_filter->p_sys;
+    i_out_size = p_block->i_nb_samples * p_sys->i_bitspersample/8 *
                  aout_FormatNbChannels( &(p_filter->fmt_out.audio) );
 
     p_out = block_Alloc( i_out_size );
@@ -449,11 +444,11 @@ static block_t *Convert( filter_t *p_filter, block_t *p_block )
         return NULL;
     }
     p_out->i_nb_samples =
-                  (p_block->i_nb_samples / p_filter->p_sys->i_nb_channels) *
+                  (p_block->i_nb_samples / p_sys->i_nb_channels) *
                        aout_FormatNbChannels( &(p_filter->fmt_out.audio) );
 
 #if 0
-    unsigned int i_in_size = in_buf.i_nb_samples  * (p_filter->p_sys->i_bitspersample/8) *
+    unsigned int i_in_size = in_buf.i_nb_samples  * (p_sys->i_bitspersample/8) *
                              aout_FormatNbChannels( &(p_filter->fmt_in.audio) );
     if( (in_buf.i_buffer != i_in_size) && ((i_in_size % 32) != 0) ) /* is it word aligned?? */
     {
@@ -463,7 +458,7 @@ static block_t *Convert( filter_t *p_filter, block_t *p_block )
 #endif
 
     memset( p_out->p_buffer, 0, i_out_size );
-    if( p_filter->p_sys->b_downmix )
+    if( p_sys->b_downmix )
     {
         stereo2mono_downmix( p_filter, p_block, p_out );
         mono( p_filter, p_out, p_block );

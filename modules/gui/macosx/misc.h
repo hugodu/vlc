@@ -1,7 +1,7 @@
 /*****************************************************************************
  * misc.h: code not specific to vlc
  *****************************************************************************
- * Copyright (C) 2003-2013 VLC authors and VideoLAN
+ * Copyright (C) 2003-2014 VLC authors and VideoLAN
  * $Id$
  *
  * Authors: Jon Lech Johansen <jon-vl@nanocrew.net>
@@ -23,155 +23,32 @@
  *****************************************************************************/
 
 #import <Cocoa/Cocoa.h>
-#import "CompatibilityFixes.h"
 
 /*****************************************************************************
- * NSSound (VLCAdditions)
+ * VLCDragDropView
  *
- * added code to change the system volume, needed for the apple remote code
- * this is simplified code, which won't let you set the exact volume
- * (that's what the audio output is for after all), but just the system volume
- * in steps of 1/16 (matching the default AR or volume key implementation).
+ * Disables default drag / drop behaviour of an NSImageView.
+ * set it for all sub image views withing an VLCDragDropView.
  *****************************************************************************/
 
-@interface NSSound (VLCAdditions)
-+ (float)systemVolumeForChannel:(int)channel;
-+ (bool)setSystemVolume:(float)volume forChannel:(int)channel;
-+ (void)increaseSystemVolume;
-+ (void)decreaseSystemVolume;
-@end
 
-/*****************************************************************************
- * NSAnimation (VLCAddition)
- *****************************************************************************/
-
-@interface NSAnimation (VLCAdditions)
-@property (readwrite) void * userInfo;
+@interface VLCDropDisabledImageView : NSImageView
 
 @end
 
 /*****************************************************************************
- * NSScreen (VLCAdditions)
- *
- *  Missing extension to NSScreen
+ * VLCDragDropView
  *****************************************************************************/
 
-@interface NSScreen (VLCAdditions)
+@interface VLCDragDropView : NSView
 
-+ (NSScreen *)screenWithDisplayID: (CGDirectDisplayID)displayID;
-- (BOOL)hasMenuBar;
-- (BOOL)hasDock;
-- (BOOL)isScreen: (NSScreen*)screen;
-- (CGDirectDisplayID)displayID;
-- (void)blackoutOtherScreens;
-+ (void)unblackoutScreens;
+@property (nonatomic, assign) id dropHandler;
+@property (nonatomic, assign) BOOL drawBorder;
 
-- (void)setFullscreenPresentationOptions;
-- (void)setNonFullscreenPresentationOptions;
-@end
-
-
-/*****************************************************************************
- * VLBrushedMetalImageView
- *****************************************************************************/
-
-@interface VLBrushedMetalImageView : NSImageView
+- (void)enablePlaylistItems;
 
 @end
 
-
-/*****************************************************************************
- * MPSlider
- *****************************************************************************/
-
-@interface MPSlider : NSSlider
-
-@end
-
-/*****************************************************************************
- * ProgressView
- *****************************************************************************/
-
-@interface VLCProgressView : NSView
-
-- (void)scrollWheel:(NSEvent *)o_event;
-
-@end
-
-
-/*****************************************************************************
- * TimeLineSlider
- *****************************************************************************/
-
-@interface TimeLineSlider : NSSlider
-{
-    NSImage *o_knob_img;
-    NSRect img_rect;
-    BOOL b_dark;
-}
-@property (readonly) CGFloat knobPosition;
-
-- (void)drawRect:(NSRect)rect;
-- (void)drawKnobInRect:(NSRect)knobRect;
-
-@end
-
-/*****************************************************************************
- * VLCVolumeSliderCommon
- *****************************************************************************/
-
-@interface VLCVolumeSliderCommon : NSSlider
-{
-    BOOL _usesBrightArtwork;
-}
-@property (readwrite, nonatomic) BOOL usesBrightArtwork;
-
-- (void)scrollWheel:(NSEvent *)o_event;
-- (void)drawFullVolumeMarker;
-
-- (CGFloat)fullVolumePos;
-
-@end
-
-@interface VolumeSliderCell : NSSliderCell
-@end
-
-/*****************************************************************************
- * ITSlider
- *****************************************************************************/
-
-@interface ITSlider : VLCVolumeSliderCommon
-{
-    NSImage *img;
-    NSRect image_rect;
-}
-
-- (void)drawRect:(NSRect)rect;
-- (void)drawKnobInRect:(NSRect)knobRect;
-
-@end
-
-/*****************************************************************************
- * VLCTimeField interface
- *****************************************************************************
- * we need the implementation to catch our click-event in the controller window
- *****************************************************************************/
-
-@interface VLCTimeField : NSTextField
-{
-    NSShadow * o_string_shadow;
-    NSTextAlignment textAlignment;
-
-    NSString *o_remaining_identifier;
-    BOOL b_time_remaining;
-}
-@property (readonly) BOOL timeRemaining;
-
--(id)initWithFrame:(NSRect)frameRect;
-
-- (void)setRemainingIdentifier:(NSString *)o_string;
-
-@end
 
 /*****************************************************************************
  * VLCMainWindowSplitView interface
@@ -184,21 +61,11 @@
  * VLCThreePartImageView interface
  *****************************************************************************/
 @interface VLCThreePartImageView : NSView
-{
-    NSImage * o_left_img;
-    NSImage * o_middle_img;
-    NSImage * o_right_img;
-}
 
 - (void)setImagesLeft:(NSImage *)left middle: (NSImage *)middle right:(NSImage *)right;
-@end
-
-/*****************************************************************************
- * VLCThreePartDropView interface
- *****************************************************************************/
-@interface VLCThreePartDropView : VLCThreePartImageView
 
 @end
+
 
 /*****************************************************************************
  * PositionFormatter interface
@@ -206,14 +73,16 @@
  * Formats a text field to only accept decimals and :
  *****************************************************************************/
 @interface PositionFormatter : NSFormatter
-{
-    NSCharacterSet *o_forbidden_characters;
-}
+
 - (NSString*)stringForObjectValue:(id)obj;
 
-- (BOOL)getObjectValue:(id*)obj forString:(NSString*)string errorDescription:(NSString**)error;
+- (BOOL)getObjectValue:(id*)obj
+             forString:(NSString*)string
+      errorDescription:(NSString**)error;
 
-- (bool)isPartialStringValid:(NSString*)partialString newEditingString:(NSString**)newString errorDescription:(NSString**)error;
+- (BOOL)isPartialStringValid:(NSString*)partialString
+            newEditingString:(NSString**)newString
+            errorDescription:(NSString**)error;
 
 @end
 
@@ -223,4 +92,27 @@
 
 @interface NSView (EnableSubviews)
 - (void)enableSubviews:(BOOL)b_enable;
+@end
+
+/*****************************************************************************
+ * VLCByteCountFormatter addition
+ *****************************************************************************/
+
+#ifndef MAC_OS_X_VERSION_10_8
+enum {
+    // Specifies display of file or storage byte counts. The actual behavior for this is platform-specific; on OS X 10.7 and less, this uses the binary style, but decimal style on 10.8 and above
+    NSByteCountFormatterCountStyleFile   = 0,
+    // Specifies display of memory byte counts. The actual behavior for this is platform-specific; on OS X 10.7 and less, this uses the binary style, but that may change over time.
+    NSByteCountFormatterCountStyleMemory = 1,
+    // The following two allow specifying the number of bytes for KB explicitly. It's better to use one of the above values in most cases.
+    NSByteCountFormatterCountStyleDecimal = 2,    // 1000 bytes are shown as 1 KB
+    NSByteCountFormatterCountStyleBinary  = 3     // 1024 bytes are shown as 1 KB
+};
+typedef NSInteger NSByteCountFormatterCountStyle;
+#endif
+
+@interface VLCByteCountFormatter : NSFormatter {
+}
+
++ (NSString *)stringFromByteCount:(long long)byteCount countStyle:(NSByteCountFormatterCountStyle)countStyle;
 @end

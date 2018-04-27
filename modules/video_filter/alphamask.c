@@ -34,6 +34,7 @@
 
 #include <vlc_image.h>
 #include <vlc_filter.h>
+#include <vlc_picture.h>
 #include <vlc_url.h>
 
 #define ALPHAMASK_HELP N_( \
@@ -65,12 +66,11 @@ vlc_module_begin ()
     set_help( ALPHAMASK_HELP )
     set_category( CAT_VIDEO )
     set_subcategory( SUBCAT_VIDEO_VFILTER )
-    set_capability( "video filter2", 0 )
+    set_capability( "video filter", 0 )
     add_shortcut( "alphamask", "mask" )
     set_callbacks( Create, Destroy )
 
-    add_loadfile( CFG_PREFIX "mask", NULL, MASK_TEXT,
-                MASK_LONGTEXT, false )
+    add_loadfile(CFG_PREFIX "mask", NULL, MASK_TEXT, MASK_LONGTEXT)
 vlc_module_end ()
 
 static const char *const ppsz_filter_options[] = {
@@ -174,18 +174,20 @@ static picture_t *Filter( filter_t *p_filter, picture_t *p_pic )
 /* copied from video_filters/erase.c . Gruik ? */
 static void LoadMask( filter_t *p_filter, const char *psz_filename )
 {
+    filter_sys_t *p_sys = p_filter->p_sys;
     image_handler_t *p_image;
     video_format_t fmt_in, fmt_out;
-    memset( &fmt_in, 0, sizeof( video_format_t ) );
-    memset( &fmt_out, 0, sizeof( video_format_t ) );
-    fmt_out.i_chroma = VLC_CODEC_YUVA;
-    if( p_filter->p_sys->p_mask )
-        picture_Release( p_filter->p_sys->p_mask );
+    video_format_Init( &fmt_in, 0 );
+    video_format_Init( &fmt_out, VLC_CODEC_YUVA );
+    if( p_sys->p_mask )
+        picture_Release( p_sys->p_mask );
     p_image = image_HandlerCreate( p_filter );
     char *psz_url = vlc_path2uri( psz_filename, NULL );
-    p_filter->p_sys->p_mask =
+    p_sys->p_mask =
         image_ReadUrl( p_image, psz_url, &fmt_in, &fmt_out );
     free( psz_url );
+    video_format_Clean( &fmt_in );
+    video_format_Clean( &fmt_out );
     image_HandlerDelete( p_image );
 }
 

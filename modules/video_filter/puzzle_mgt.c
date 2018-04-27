@@ -35,6 +35,7 @@
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_filter.h>
+#include <vlc_picture.h>
 #include <vlc_rand.h>
 
 #include "filter_picture.h"
@@ -465,11 +466,9 @@ int puzzle_shuffle( filter_t *p_filter )
 int puzzle_generate_rand_pce_list( filter_t *p_filter, int32_t **pi_pce_lst )
 {
     filter_sys_t *p_sys = p_filter->p_sys;
-
     int32_t i_pieces_nbr = p_sys->s_allocated.i_pieces_nbr;
 
-    if (pi_pce_lst != NULL )
-        free( *pi_pce_lst );
+    free( *pi_pce_lst );
     *pi_pce_lst = calloc( i_pieces_nbr, sizeof(**pi_pce_lst) );
     if( !*pi_pce_lst )
         return VLC_ENOMEM;
@@ -521,8 +520,8 @@ int puzzle_piece_foreground( filter_t *p_filter, int32_t i_piece) {
         }
     }
 
-    free( p_filter->p_sys->ps_pieces );
-    p_filter->p_sys->ps_pieces = ps_pieces_tmp;
+    free( p_sys->ps_pieces );
+    p_sys->ps_pieces = ps_pieces_tmp;
 
     return VLC_SUCCESS;
 }
@@ -716,8 +715,8 @@ int puzzle_sort_layers( filter_t *p_filter)
         }
     }
 
-    free( p_filter->p_sys->ps_pieces );
-    p_filter->p_sys->ps_pieces = p_sys->ps_pieces_tmp;
+    free( p_sys->ps_pieces );
+    p_sys->ps_pieces = p_sys->ps_pieces_tmp;
     p_sys->ps_pieces_tmp = malloc( sizeof( piece_t) * p_sys->s_allocated.i_pieces_nbr );
     if (!p_sys->ps_pieces_tmp)
         return VLC_ENOMEM;

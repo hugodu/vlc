@@ -30,11 +30,13 @@
 # include "config.h"
 #endif
 
+#include <stdatomic.h>
+
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_sout.h>
 #include <vlc_filter.h>
-#include <vlc_atomic.h>
+#include <vlc_picture.h>
 #include "filter_picture.h"
 
 /*****************************************************************************
@@ -58,7 +60,7 @@ static int MotionBlurCallback( vlc_object_t *, char const *,
 vlc_module_begin ()
     set_shortname( N_("Motion blur") )
     set_description( N_("Motion blur filter") )
-    set_capability( "video filter2", 0 )
+    set_capability( "video filter", 0 )
     set_category( CAT_VIDEO )
     set_subcategory( SUBCAT_VIDEO_VFILTER )
 
@@ -97,27 +99,28 @@ static int Create( vlc_object_t *p_this )
         return VLC_EGENERIC;
 
     /* Allocate structure */
-    p_filter->p_sys = malloc( sizeof( filter_sys_t ) );
-    if( p_filter->p_sys == NULL )
+    filter_sys_t *p_sys = malloc( sizeof( filter_sys_t ) );
+    if( p_sys == NULL )
         return VLC_ENOMEM;
+    p_filter->p_sys = p_sys;
 
-    p_filter->p_sys->p_tmp = picture_NewFromFormat( &p_filter->fmt_in.video );
-    if( !p_filter->p_sys->p_tmp )
+    p_sys->p_tmp = picture_NewFromFormat( &p_filter->fmt_in.video );
+    if( !p_sys->p_tmp )
     {
-        free( p_filter->p_sys );
+        free( p_sys );
         return VLC_ENOMEM;
     }
-    p_filter->p_sys->b_first = true;
+    p_sys->b_first = true;
 
     p_filter->pf_video_filter = Filter;
 
     config_ChainParse( p_filter, FILTER_PREFIX, ppsz_filter_options,
                        p_filter->p_cfg );
 
-    atomic_init( &p_filter->p_sys->i_factor,
+    atomic_init( &p_sys->i_factor,
              var_CreateGetIntegerCommand( p_filter, FILTER_PREFIX "factor" ) );
     var_AddCallback( p_filter, FILTER_PREFIX "factor",
-                     MotionBlurCallback, p_filter->p_sys );
+                     MotionBlurCallback, p_sys );
 
 
     return VLC_SUCCESS;
@@ -129,12 +132,13 @@ static int Create( vlc_object_t *p_this )
 static void Destroy( vlc_object_t *p_this )
 {
     filter_t *p_filter = (filter_t *)p_this;
+    filter_sys_t *p_sys = p_filter->p_sys;
 
     var_DelCallback( p_filter, FILTER_PREFIX "factor",
-                     MotionBlurCallback, p_filter->p_sys );
+                     MotionBlurCallback, p_sys );
 
-    picture_Release( p_filter->p_sys->p_tmp );
-    free( p_filter->p_sys );
+    picture_Release( p_sys->p_tmp );
+    free( p_sys );
 }
 
 /*****************************************************************************
@@ -174,11 +178,10 @@ static picture_t *Filter( filter_t *p_filter, picture_t *p_pic )
 static void RenderBlur( filter_sys_t *p_sys, picture_t *p_newpic,
                         picture_t *p_outpic )
 {
-    int i_plane;
     const int i_oldfactor = atomic_load( &p_sys->i_factor );
     int i_newfactor = 128 - i_oldfactor;
 
-    for( i_plane = 0; i_plane < p_outpic->i_planes; i_plane++ )
+    for( int i_plane = 0; i_plane < p_outpic->i_planes; i_plane++ )
     {
         uint8_t *p_old, *p_new, *p_out, *p_out_end, *p_out_line_end;
         const int i_visible_pitch = p_outpic->p[i_plane].i_visible_pitch;

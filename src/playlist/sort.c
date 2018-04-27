@@ -38,7 +38,7 @@
  * Compare two items using their title or name
  * @param first: the first item
  * @param second: the second item
- * @return -1, 0 or 1 like strcmp
+ * @return -1, 0 or +1 like strcmp
  */
 static inline int meta_strcasecmp_title( const playlist_item_t *first,
                               const playlist_item_t *second )
@@ -50,7 +50,7 @@ static inline int meta_strcasecmp_title( const playlist_item_t *first,
     if( psz_first && psz_second )
         i_ret = strcasecmp( psz_first, psz_second );
     else if( !psz_first && psz_second )
-        i_ret = 1;
+        i_ret = +1;
     else if( psz_first && !psz_second )
         i_ret = -1;
     else
@@ -62,12 +62,12 @@ static inline int meta_strcasecmp_title( const playlist_item_t *first,
 }
 
 /**
- * Compare two intems accoring to the given meta type
+ * Compare two intems according to the given meta type
  * @param first: the first item
  * @param second: the second item
  * @param meta: the meta type to use to sort the items
  * @param b_integer: true if the meta are integers
- * @return -1, 0 or 1 like strcmp
+ * @return -1, 0 or +1 like strcmp
  */
 static inline int meta_sort( const playlist_item_t *first,
                              const playlist_item_t *second,
@@ -79,20 +79,19 @@ static inline int meta_sort( const playlist_item_t *first,
 
     /* Nodes go first */
     if( first->i_children == -1 && second->i_children >= 0 )
-        i_ret = 1;
+        i_ret = -1;
     else if( first->i_children >= 0 && second->i_children == -1 )
-       i_ret = -1;
+        i_ret = +1;
     /* Both are nodes, sort by name */
     else if( first->i_children >= 0 && second->i_children >= 0 )
         i_ret = meta_strcasecmp_title( first, second );
     /* Both are items */
+    else if( !psz_first && !psz_second )
+        i_ret = 0;
     else if( !psz_first && psz_second )
-        i_ret = 1;
+        i_ret = +1;
     else if( psz_first && !psz_second )
         i_ret = -1;
-    /* No meta, sort by name */
-    else if( !psz_first && !psz_second )
-        i_ret = meta_strcasecmp_title( first, second );
     else
     {
         if( b_integer )
@@ -193,6 +192,8 @@ static int recursiveNodeSort( playlist_t *p_playlist, playlist_item_t *p_node,
 int playlist_RecursiveNodeSort( playlist_t *p_playlist, playlist_item_t *p_node,
                                 int i_mode, int i_type )
 {
+    PL_ASSERT_LOCKED;
+
     /* Ask the playlist to reset as we are changing the order */
     pl_priv(p_playlist)->b_reset_currently_playing = true;
 
@@ -212,14 +213,39 @@ int playlist_RecursiveNodeSort( playlist_t *p_playlist, playlist_item_t *p_node,
  */
 
 #define SORTFN( SORT, first, second ) static inline int proto_##SORT \
-	( const playlist_item_t *first, const playlist_item_t *second )
+    ( const playlist_item_t *first, const playlist_item_t *second )
+
+SORTFN( SORT_TRACK_NUMBER, first, second )
+{
+    return meta_sort( first, second, vlc_meta_TrackNumber, true );
+}
+
+SORTFN( SORT_DISC_NUMBER, first, second )
+{
+    int i_ret = meta_sort( first, second, vlc_meta_DiscNumber, true );
+    /* Items came from the same disc: compare the track numbers */
+    if( i_ret == 0 )
+        i_ret = proto_SORT_TRACK_NUMBER( first, second );
+
+    return i_ret;
+}
 
 SORTFN( SORT_ALBUM, first, second )
 {
     int i_ret = meta_sort( first, second, vlc_meta_Album, false );
-    /* Items came from the same album: compare the track numbers */
+    /* Items came from the same album: compare the disc numbers */
     if( i_ret == 0 )
-        i_ret = meta_sort( first, second, vlc_meta_TrackNumber, true );
+        i_ret = proto_SORT_DISC_NUMBER( first, second );
+
+    return i_ret;
+}
+
+SORTFN( SORT_DATE, first, second )
+{
+    int i_ret = meta_sort( first, second, vlc_meta_Date, true );
+    /* Items came from the same date: compare the albums */
+    if( i_ret == 0 )
+        i_ret = proto_SORT_ALBUM( first, second );
 
     return i_ret;
 }
@@ -227,9 +253,9 @@ SORTFN( SORT_ALBUM, first, second )
 SORTFN( SORT_ARTIST, first, second )
 {
     int i_ret = meta_sort( first, second, vlc_meta_Artist, false );
-    /* Items came from the same artist: compare the albums */
+    /* Items came from the same artist: compare the dates */
     if( i_ret == 0 )
-        i_ret = proto_SORT_ALBUM( first, second );
+        i_ret = proto_SORT_DATE( first, second );
 
     return i_ret;
 }
@@ -243,7 +269,7 @@ SORTFN( SORT_DURATION, first, second )
 {
     mtime_t time1 = input_item_GetDuration( first->p_input );
     mtime_t time2 = input_item_GetDuration( second->p_input );
-    int i_ret = time1 > time2 ? 1 :
+    int i_ret = time1 > time2 ? +1 :
                     ( time1 == time2 ? 0 : -1 );
     return i_ret;
 }
@@ -270,12 +296,12 @@ SORTFN( SORT_TITLE, first, second )
 
 SORTFN( SORT_TITLE_NODES_FIRST, first, second )
 {
-    /* If first is a node but not second */
+    /* If second is a node but not first */
     if( first->i_children == -1 && second->i_children >= 0 )
         return -1;
-    /* If second is a node but not first */
+    /* If first is a node but not second */
     else if( first->i_children >= 0 && second->i_children == -1 )
-        return 1;
+        return +1;
     /* Both are nodes or both are not nodes */
     else
         return meta_strcasecmp_title( first, second );
@@ -290,7 +316,7 @@ SORTFN( SORT_TITLE_NUMERIC, first, second )
     if( psz_first && psz_second )
         i_ret = atoi( psz_first ) - atoi( psz_second );
     else if( !psz_first && psz_second )
-        i_ret = 1;
+        i_ret = +1;
     else if( psz_first && !psz_second )
         i_ret = -1;
     else
@@ -299,11 +325,6 @@ SORTFN( SORT_TITLE_NUMERIC, first, second )
     free( psz_first );
     free( psz_second );
     return i_ret;
-}
-
-SORTFN( SORT_TRACK_NUMBER, first, second )
-{
-    return meta_sort( first, second, vlc_meta_TrackNumber, true );
 }
 
 SORTFN( SORT_URI, first, second )
@@ -315,7 +336,7 @@ SORTFN( SORT_URI, first, second )
     if( psz_first && psz_second )
         i_ret = strcasecmp( psz_first, psz_second );
     else if( !psz_first && psz_second )
-        i_ret = 1;
+        i_ret = +1;
     else if( psz_first && !psz_second )
         i_ret = -1;
     else
@@ -337,14 +358,14 @@ SORTFN( SORT_URI, first, second )
 #endif
 
 #define DEF( s ) \
-	static int cmp_a_##s(const void *l,const void *r) \
-	{ return proto_##s(*(const playlist_item_t *const *)l, \
+    static int cmp_a_##s(const void *l,const void *r) \
+    { return proto_##s(*(const playlist_item_t *const *)l, \
                            *(const playlist_item_t *const *)r); } \
-	static int cmp_d_##s(const void *l,const void *r) \
-	{ return -1*proto_##s(*(const playlist_item_t * const *)l, \
+    static int cmp_d_##s(const void *l,const void *r) \
+    { return -1*proto_##s(*(const playlist_item_t * const *)l, \
                               *(const playlist_item_t * const *)r); }
 
-	VLC_DEFINE_SORT_FUNCTIONS
+    VLC_DEFINE_SORT_FUNCTIONS
 
 #undef  DEF
 
@@ -354,4 +375,3 @@ static const sortfn_t sorting_fns[NUM_SORT_FNS][2] =
 #define DEF( a ) { cmp_a_##a, cmp_d_##a },
 { VLC_DEFINE_SORT_FUNCTIONS };
 #undef  DEF
-

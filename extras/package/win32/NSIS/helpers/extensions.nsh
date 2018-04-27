@@ -2,8 +2,8 @@
 ; 1. File type associations ;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; Function that registers one extension for VLC
-Function RegisterExtension
+;; Function that associates one extension with VLC
+Function AssociateExtension
   ; back up old value for extension $R0 (eg. ".opt")
   ReadRegStr $1 HKCR "$R0" ""
   StrCmp $1 "" NoBackup
@@ -11,50 +11,34 @@ Function RegisterExtension
     WriteRegStr HKCR "$R0" "VLC.backup" $1
 NoBackup:
   WriteRegStr HKCR "$R0" "" "VLC$R0"
-  ReadRegStr $0 HKCR "VLC$R0" ""
-  WriteRegStr HKCR "VLC$R0" "" "VLC media file ($R0)"
+FunctionEnd
+
+;; Function that registers one extension for VLC
+Function RegisterExtension
+  WriteRegStr HKCR "VLC$R0" "" "VLC media file"
   WriteRegStr HKCR "VLC$R0\shell" "" "Open"
-  WriteRegStr HKCR "VLC$R0\shell\Open" "" $ShellAssociation_Play
+  WriteRegStr HKCR "VLC$R0\shell\Open" "" "$(ShellAssociation_Play)"
   WriteRegStr HKCR "VLC$R0\shell\Open" "MultiSelectModel" "Player"
   WriteRegStr HKCR "VLC$R0\shell\Open\command" "" '"$INSTDIR\vlc.exe" --started-from-file "%1"'
   WriteRegStr HKCR "VLC$R0\DefaultIcon" "" '"$INSTDIR\vlc.exe",0'
+  WriteRegStr HKCR "Applications\vlc.exe\SupportedTypes" $0 ""
 
-;;; Vista Only part
-  ; Vista and above detection
-  ReadRegStr $R1 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" CurrentVersion
-  StrCpy $R2 $R1 1
-  StrCmp $R2 '6' ForVista ToEnd
-ForVista:
-  WriteRegStr HKLM "Software\Clients\Media\VLC\Capabilities\FileAssociations" "$R0" "VLC$R0"
-
-ToEnd:
+  ${If} ${AtLeastWinVista}
+    WriteRegStr HKLM "Software\Clients\Media\VLC\Capabilities\FileAssociations" "$R0" "VLC$R0"
+  ${EndIf}
 FunctionEnd
 
 ;; Function that registers one skin extension for VLC
 Function RegisterSkinExtension
-  ; back up old value for extension $R0 (eg. ".opt")
-  ReadRegStr $1 HKCR "$R0" ""
-  StrCmp $1 "" NoBackup
-    StrCmp $1 "VLC$R0" "NoBackup"
-    WriteRegStr HKCR "$R0" "VLC.backup" $1
-NoBackup:
-  WriteRegStr HKCR "$R0" "" "VLC$R0"
-  ReadRegStr $0 HKCR "VLC$R0" ""
   WriteRegStr HKCR "VLC$R0" "" "VLC skin file ($R0)"
   WriteRegStr HKCR "VLC$R0\shell" "" "Open"
   WriteRegStr HKCR "VLC$R0\shell\Open" "" ""
   WriteRegStr HKCR "VLC$R0\shell\Open\command" "" '"$INSTDIR\vlc.exe" -Iskins --skins2-last "%1"'
   WriteRegStr HKCR "VLC$R0\DefaultIcon" "" '"$INSTDIR\vlc.exe",0'
 
-;;; Vista Only part
-  ; Vista and above detection
-  ReadRegStr $R1 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" CurrentVersion
-  StrCpy $R2 $R1 1
-  StrCmp $R2 '6' ForVista ToEnd
-ForVista:
-  WriteRegStr HKLM "Software\Clients\Media\VLC\Capabilities\FileAssociations" "$R0" "VLC$R0"
-
-ToEnd:
+  ${If} ${AtLeastWinVista}
+    WriteRegStr HKLM "Software\Clients\Media\VLC\Capabilities\FileAssociations" "$R0" "VLC$R0"
+  ${EndIf}
 FunctionEnd
 
 ;; Function that removes one extension that VLC owns.
@@ -75,24 +59,48 @@ NoOwn:
     DeleteRegKey HKLM "Software\Clients\Media\VLC\Capabilities\FileAssociations\VLC$R0" ; for vista
 FunctionEnd
 
-!macro RegisterExtensionSection TYPE EXT
+!macro AssociateExtensionSection TYPE EXT
   ${MementoSection} ${EXT} SEC_EXT_${TYPE}_${EXT}
     SectionIn 1 3
     Push $R0
     StrCpy $R0 ${EXT}
-    Call RegisterExtension
+    Call AssociateExtension
     Pop $R0
   ${MementoSectionEnd}
 !macroend
 
-!macro RegisterSkinExtensionSection TYPE EXT
+!macro AssociateSkinExtensionSection TYPE EXT
   ${MementoUnselectedSection} ${EXT} SEC_EXT_SKIN_${EXT}
     SectionIn 1 3
     Push $R0
     StrCpy $R0 ${EXT}
-    Call RegisterSkinExtension
+    Call AssociateExtension
     Pop $R0
   ${MementoSectionEnd}
+!macroend
+
+!macro AssociateExtensionUnselectedSection TYPE EXT
+  ${MementoUnselectedSection} ${EXT} SEC_EXT_${TYPE}_${EXT}
+    SectionIn 1 3
+    Push $R0
+    StrCpy $R0 ${EXT}
+    Call AssociateExtension
+    Pop $R0
+  ${MementoSectionEnd}
+!macroend
+
+!macro RegisterExtensionMacro TYPE EXT
+  Push $R0
+  StrCpy $R0 ${EXT}
+  Call RegisterExtension
+  Pop $R0
+!macroend
+
+!macro RegisterSkinExtensionMacro TYPE EXT
+  Push $R0
+  StrCpy $R0 ${EXT}
+  Call RegisterSkinExtension
+  Pop $R0
 !macroend
 
 !macro UnRegisterExtensionSection TYPE EXT
@@ -100,10 +108,6 @@ FunctionEnd
   StrCpy $R0 ${EXT}
   Call un.RegisterExtension
   Pop $R0
-!macroend
-
-!macro WriteRegStrSupportedTypes TYPE EXT
-  WriteRegStr HKCR Applications\vlc.exe\SupportedTypes ${EXT} ""
 !macroend
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -170,9 +174,12 @@ FunctionEnd
   !insertmacro ${_action} Video ".amv"
   !insertmacro ${_action} Video ".asf"
   !insertmacro ${_action} Video ".avi"
+  !insertmacro ${_action} Video ".bik"
   !insertmacro ${_action} Video ".divx"
   !insertmacro ${_action} Video ".drc"
   !insertmacro ${_action} Video ".dv"
+  !insertmacro ${_action} Video ".dvr-ms"
+  !insertmacro ${_action} Video ".evo"
   !insertmacro ${_action} Video ".f4v"
   !insertmacro ${_action} Video ".flv"
   !insertmacro ${_action} Video ".gvi"
@@ -184,7 +191,6 @@ FunctionEnd
   !insertmacro ${_action} Video ".m4v"
   !insertmacro ${_action} Video ".mkv"
   !insertmacro ${_action} Video ".mov"
-  !insertmacro ${_action} Video ".mp2"
   !insertmacro ${_action} Video ".mp2v"
   !insertmacro ${_action} Video ".mp4"
   !insertmacro ${_action} Video ".mp4v"
@@ -208,20 +214,23 @@ FunctionEnd
   !insertmacro ${_action} Video ".rec"
   !insertmacro ${_action} Video ".rm"
   !insertmacro ${_action} Video ".rmvb"
+  !insertmacro ${_action} Video ".rpl"
+  !insertmacro ${_action} Video ".thp"
   !insertmacro ${_action} Video ".tod"
+  !insertmacro ${_action} Video ".tp"
   !insertmacro ${_action} Video ".ts"
   !insertmacro ${_action} Video ".tts"
   !insertmacro ${_action} Video ".vob"
   !insertmacro ${_action} Video ".vro"
   !insertmacro ${_action} Video ".webm"
   !insertmacro ${_action} Video ".wmv"
+  !insertmacro ${_action} Video ".wtv"
   !insertmacro ${_action} Video ".xesc"
 !macroend
 
 !macro MacroOtherExtensions _action
   !insertmacro ${_action} Other ".asx"
   !insertmacro ${_action} Other ".b4s"
-  !insertmacro ${_action} Other ".bin"
   !insertmacro ${_action} Other ".cue"
   !insertmacro ${_action} Other ".ifo"
   !insertmacro ${_action} Other ".m3u"
@@ -234,6 +243,12 @@ FunctionEnd
   !insertmacro ${_action} Other ".xspf"
 !macroend
 
+!macro MacroUnassociatedExtensions _action
+  !insertmacro ${_action} Other ".iso"
+  !insertmacro ${_action} Other ".zip"
+  !insertmacro ${_action} Other ".rar"
+!macroend
+
 !macro MacroSkinExtensions _action
   !insertmacro ${_action} Skin ".vlt"
   !insertmacro ${_action} Skin ".wsz"
@@ -244,22 +259,24 @@ FunctionEnd
   !insertmacro MacroAudioExtensions ${_action}
   !insertmacro MacroVideoExtensions ${_action}
   !insertmacro MacroOtherExtensions ${_action}
+  !insertmacro MacroUnassociatedExtensions ${_action}
 !macroend
 
 ; Generic function for adding the context menu for one ext.
 !macro AddContextMenuExt EXT
-  WriteRegStr HKCR ${EXT}\shell\PlayWithVLC "" $ContextMenuEntry_PlayWith
+  WriteRegStr HKCR ${EXT}\shell\PlayWithVLC "" "$(ContextMenuEntry_PlayWith)"
+  WriteRegStr HKCR ${EXT}\shell\PlayWithVLC "Icon" '"$INSTDIR\vlc.exe",0'
+  WriteRegStr HKCR ${EXT}\shell\PlayWithVLC "MultiSelectModel" "Player"
   WriteRegStr HKCR ${EXT}\shell\PlayWithVLC\command "" '"$INSTDIR\vlc.exe" --started-from-file --no-playlist-enqueue "%1"'
 
-  WriteRegStr HKCR ${EXT}\shell\AddToPlaylistVLC "" $ContextMenuEntry_AddToPlaylist
+  WriteRegStr HKCR ${EXT}\shell\AddToPlaylistVLC "" "$(ContextMenuEntry_AddToPlaylist)"
+  WriteRegStr HKCR ${EXT}\shell\AddToPlaylistVLC "Icon" '"$INSTDIR\vlc.exe",0'
+  WriteRegStr HKCR ${EXT}\shell\AddToPlaylistVLC "MultiSelectModel" "Player"
   WriteRegStr HKCR ${EXT}\shell\AddToPlaylistVLC\command "" '"$INSTDIR\vlc.exe" --started-from-file --playlist-enqueue "%1"'
 !macroend
 
 !macro AddContextMenu TYPE EXT
-  Push $R0
-  ReadRegStr $R0 HKCR ${EXT} ""
-  !insertmacro AddContextMenuExt $R0
-  Pop $R0
+  !insertmacro AddContextMenuExt VLC${EXT}
 !macroend
 
 !macro DeleteContextMenuExt EXT
@@ -268,10 +285,7 @@ FunctionEnd
 !macroend
 
 !macro DeleteContextMenu TYPE EXT
-  Push $R0
-  ReadRegStr $R0 HKCR ${EXT} ""
-  !insertmacro DeleteContextMenuExt $R0
-  Pop $R0
+  !insertmacro DeleteContextMenuExt VLC${EXT}
 !macroend
 
 
